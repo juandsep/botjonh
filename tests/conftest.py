@@ -3,9 +3,9 @@ import os
 
 for key, value in {
     "GCP_PROJECT_ID": "test-project",
-    "WEBHOOK_SECRET_TOKEN": "test-secret",
+    "WEBHOOK_SECRET_TOKEN": "test-secret",  # pragma: allowlist secret
     "WEBHOOK_PATH": "test-path",
     "TELEGRAM_BOT_TOKEN": "123:test",
-    "DEEPSEEK_API_KEY": "test-key",
+    "DEEPSEEK_API_KEY": "test-key",  # pragma: allowlist secret
 }.items():
     os.environ.setdefault(key, value)

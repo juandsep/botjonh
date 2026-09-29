@@ -276,6 +276,12 @@ resource "google_pubsub_subscription" "updates_push" {
   topic = google_pubsub_topic.updates.name
 
   ack_deadline_seconds = 60
+  # A failing message is dropped after 10 minutes instead of 7 days.
+  message_retention_duration = "600s"
+  retry_policy {
+    minimum_backoff = "10s"
+    maximum_backoff = "600s"
+  }
   push_config {
     push_endpoint = "${var.worker_url}/push"
     oidc_token {
@@ -290,6 +296,12 @@ resource "google_pubsub_subscription" "cron_push" {
   topic = google_pubsub_topic.cron.name
 
   ack_deadline_seconds = 120
+  # A failing message is dropped after 10 minutes instead of 7 days.
+  message_retention_duration = "600s"
+  retry_policy {
+    minimum_backoff = "10s"
+    maximum_backoff = "600s"
+  }
   push_config {
     push_endpoint = "${var.worker_url}/push"
     oidc_token {

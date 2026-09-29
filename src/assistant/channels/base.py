@@ -15,6 +15,8 @@ class InboundMessage:
     chat_id: str
     text: str
     update_id: int
+    callback_data: str | None = None
+    callback_query_id: str | None = None
 
 
 class Channel(Protocol):
