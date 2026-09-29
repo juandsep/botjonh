@@ -16,6 +16,7 @@ def get_user(chat_id: str) -> dict | None            # users/{chat_id}
 def upsert_user(chat_id: str, nombre: str, rol: str, moneda: str = "USD",
                 zona_horaria: str = "America/Panama") -> None
 def mark_processed(update_id: int) -> bool           # True if new; transaction, 7-day TTL field
+def unmark_processed(update_id: int) -> None         # api: undo when publish fails
 def redeem_invite(code: str, chat_id: str) -> bool   # transaction: single use, 24 h, creates beta user
 def check_rate(chat_id: str, limit_per_minute: int) -> bool   # True if allowed
 def llm_spend_today(chat_id: str) -> Decimal
