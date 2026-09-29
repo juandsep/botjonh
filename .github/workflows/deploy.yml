@@ -36,13 +36,12 @@ jobs:
           GCP_WEBHOOK_SA: ${{ vars.GCP_WEBHOOK_SA }}
           GCP_WORKER_SA: ${{ vars.GCP_WORKER_SA }}
           MLFLOW_TRACKING_URI: ${{ vars.MLFLOW_TRACKING_URI }}
-          SPREADSHEET_ID: ${{ vars.SPREADSHEET_ID }}
-          CALENDAR_ID: ${{ vars.CALENDAR_ID }}
+          BACKUP_BUCKET: ${{ vars.BACKUP_BUCKET }}
         run: |
           missing=0
           for name in GCP_PROJECT_ID GCP_REGION GCP_ARTIFACT_REPO GCP_WIF_PROVIDER \
                       GCP_DEPLOY_SA GCP_WEBHOOK_SA GCP_WORKER_SA MLFLOW_TRACKING_URI \
-                      SPREADSHEET_ID CALENDAR_ID; do
+                      BACKUP_BUCKET; do
             if [ -z "${!name}" ]; then
               echo "::error::variable $name is empty; set it before deploying"
               missing=1
@@ -85,9 +84,11 @@ jobs:
             --memory=512Mi
             --min-instances=0
             --max-instances=2
+            --allow-unauthenticated
             --command=uvicorn,assistant.api:app,--host,0.0.0.0,--port,8080
+          env_vars: |
+            GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
           secrets: |
-            TELEGRAM_BOT_TOKEN=assistant-bot-token:latest
             WEBHOOK_SECRET_TOKEN=assistant-webhook-secret:latest
             WEBHOOK_PATH=assistant-webhook-path:latest
 
@@ -105,9 +106,11 @@ jobs:
             --no-allow-unauthenticated
             --command=uvicorn,assistant.worker:app,--host,0.0.0.0,--port,8080
           env_vars: |
+            GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
+            BACKUP_BUCKET=${{ vars.BACKUP_BUCKET }}
             MLFLOW_TRACKING_URI=${{ vars.MLFLOW_TRACKING_URI }}
             SPREADSHEET_ID=${{ vars.SPREADSHEET_ID }}
             CALENDAR_ID=${{ vars.CALENDAR_ID }}
           secrets: |
             TELEGRAM_BOT_TOKEN=assistant-bot-token:latest
-            GEMINI_API_KEY=assistant-gemini-key:latest
+            DEEPSEEK_API_KEY=assistant-deepseek-key:latest
