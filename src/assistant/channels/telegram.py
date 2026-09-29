@@ -8,9 +8,33 @@ from __future__ import annotations
 
 import httpx
 
-from assistant.channels.base import Channel
+from assistant.channels.base import Channel, InboundMessage
 
 API_BASE = "https://api.telegram.org"
+
+
+def parse_update(update: object) -> InboundMessage | None:
+    """A ``message`` or ``callback_query`` update; None for anything else."""
+    if not isinstance(update, dict):
+        return None
+    try:
+        if "callback_query" in update:
+            cq = update["callback_query"]
+            return InboundMessage(
+                chat_id=str(cq["message"]["chat"]["id"]),
+                text="",
+                update_id=int(update["update_id"]),
+                callback_data=str(cq.get("data", "")),
+                callback_query_id=str(cq["id"]),
+            )
+        msg = update["message"]
+        return InboundMessage(
+            chat_id=str(msg["chat"]["id"]),
+            text=str(msg.get("text", "")),
+            update_id=int(update["update_id"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 class Telegram(Channel):
