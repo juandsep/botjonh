@@ -1,0 +1,57 @@
+[project]
+name = "botjonh"
+version = "0.1.0"
+description = "Telegram personal assistant: expense tracking, budget advice and calendar reminders on GCP"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn>=0.28.0",
+    "pydantic>=2.6.0",
+    "httpx>=0.27.0",
+    "google-cloud-firestore>=2.15.0",
+    "google-cloud-pubsub>=2.19.0",
+    "google-cloud-storage>=2.14.0",
+    "google-api-python-client>=2.120.0",
+    "google-auth>=2.27.0",
+    "mlflow-skinny>=2.10.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.18,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "assistant"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=7.1.0",
+    "respx>=0.21.0",
+    "ruff>=0.6.0",
+    "mypy>=1.8.0",
+    "pre-commit>=3.6.0",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["src/assistant"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
