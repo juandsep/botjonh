@@ -71,7 +71,8 @@ Logging; message text is stored hashed in MLflow.
 ## Prompts and tools
 
 The system prompt and tool schemas are versioned artifacts under
-`src/assistant/llm/`. A change there bumps the prompt version, which is
+`src/assistant/llm/`. The prompt version is the sha256 (12 hex chars) of
+`system.md` plus the tools JSON, so any change bumps it automatically; it is
 recorded in MLflow so latency and cost are comparable across versions. Tool
 names are allowlisted in `tools.py`; the LLM emits JSON validated against a
 schema and the code performs the write — the model never executes anything.
