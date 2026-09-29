@@ -1,174 +1,285 @@
-"""Tool schemas (allowlist) and dispatch.
+"""Tool schemas (allowlist), validation and dispatch.
 
-The LLM emits JSON validated against these schemas; the code performs the write.
-Only the tools registered in TOOLS are callable — anything else is rejected.
+The LLM emits JSON; one pydantic model per tool validates it (strict, no extra
+keys) and only then the code calls the service. Anything not in ``TOOLS`` is
+rejected before any side effect. Services are imported lazily by name so this
+module imports without credentials or the service modules themselves.
 """
 
 from __future__ import annotations
 
+import copy
+import importlib
+import json
 from collections.abc import Callable
-from typing import Any
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Annotated, Any, Literal
 
-# Gemini function declarations (tool calling). Keep in sync with the system
-# prompt and the dispatch table below.
-TOOL_DECLARATIONS: list[dict[str, Any]] = [
-    {
-        "name": "registrar_gasto",
-        "description": "Registra un gasto en el ledger (append-only).",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "monto": {"type": "number"},
-                "moneda": {
-                    "type": "string",
-                    "description": "Código ISO 4217, p.ej. USD.",
-                },
-                "categoria": {
-                    "type": "string",
-                    "description": "almuerzo, transporte, salud, ocio, vivienda, otro.",
-                },
-                "fecha": {
-                    "type": "string",
-                    "description": "Fecha ISO 8601 (YYYY-MM-DD).",
-                },
-                "nota": {"type": "string", "description": "Nota opcional."},
-            },
-            "required": ["monto", "moneda", "categoria", "fecha"],
-        },
-    },
-    {
-        "name": "registrar_ingreso",
-        "description": "Registra un ingreso en el ledger.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "monto": {"type": "number"},
-                "moneda": {"type": "string"},
-                "fuente": {"type": "string"},
-                "fecha": {"type": "string"},
-                "nota": {"type": "string"},
-            },
-            "required": ["monto", "moneda", "fuente", "fecha"],
-        },
-    },
-    {
-        "name": "resumen_finanzas",
-        "description": "Resumen agregado del ledger en un periodo.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "periodo": {"type": "string", "enum": ["hoy", "mes", "semana"]},
-            },
-            "required": ["periodo"],
-        },
-    },
-    {
-        "name": "recomendar_presupuesto",
-        "description": (
-            "Compara gasto por categoría contra el presupuesto y sugiere dónde ahorrar."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "periodo": {"type": "string", "enum": ["mes"]},
-            },
-            "required": ["periodo"],
-        },
-    },
-    {
-        "name": "crear_evento",
-        "description": "Crea un evento en el calendario dedicado.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "titulo": {"type": "string"},
-                "inicio": {"type": "string", "description": "ISO 8601 con hora."},
-                "fin": {"type": "string"},
-                "ubicacion": {"type": "string"},
-                "recordatorio_min": {"type": "integer"},
-            },
-            "required": ["titulo", "inicio"],
-        },
-    },
-    {
-        "name": "listar_agenda",
-        "description": "Lista eventos del calendario en un rango.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "rango": {"type": "string", "enum": ["hoy", "manana", "semana"]},
-            },
-            "required": ["rango"],
-        },
-    },
-    {
-        "name": "cancelar_evento",
-        "description": "Borra un evento (requiere confirmación previa).",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "evento_id": {"type": "string"},
-                "confirmado": {"type": "boolean"},
-            },
-            "required": ["evento_id", "confirmado"],
-        },
-    },
-    {
-        "name": "recordatorio",
-        "description": "Programa un mensaje de recordatorio.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "texto": {"type": "string"},
-                "cuando": {"type": "string", "description": "ISO 8601 con hora."},
-            },
-            "required": ["texto", "cuando"],
-        },
-    },
-    {
-        "name": "agregar_beta",
-        "description": "Añade un beta tester a la lista blanca. Solo owner.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "chat_id": {"type": "string"},
-                "nombre": {"type": "string"},
-            },
-            "required": ["chat_id", "nombre"],
-        },
-    },
-    {
-        "name": "listar_usuarios",
-        "description": "Lista la lista blanca de usuarios. Solo owner.",
-        "parameters": {"type": "object", "properties": {}},
-    },
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    WithJsonSchema,
+)
+
+from assistant.config import get_worker_settings
+from assistant.context import CATEGORIES, ToolContext
+
+
+class ToolRejected(ValueError):
+    """A tool call that never reaches a service. The message is a short code."""
+
+
+def _categoria(value: str) -> str:
+    if value not in CATEGORIES:
+        raise ValueError("categoria fuera del enum")
+    return value
+
+
+Monto = Annotated[
+    Decimal, Field(gt=0), WithJsonSchema({"type": "number", "exclusiveMinimum": 0})
+]
+Moneda = Annotated[str, Field(pattern=r"^[A-Z]{3}$", description="ISO 4217, ej. USD")]
+Categoria = Annotated[
+    str,
+    AfterValidator(_categoria),
+    WithJsonSchema({"type": "string", "enum": list(CATEGORIES)}),
 ]
 
-# Dispatch table: tool name -> callable. Implementations live in services/.
-# A name not present here is rejected before any side effect.
-TOOLS: dict[str, Callable[..., Any]] = {
-    # "registrar_gasto": services.sheets.registrar_gasto,
-    # "registrar_ingreso": services.sheets.registrar_ingreso,
-    # "resumen_finanzas": services.sheets.resumen_finanzas,
-    # "recomendar_presupuesto": services.budgets.recomendar_presupuesto,
-    # "crear_evento": services.calendar.crear_evento,
-    # "listar_agenda": services.calendar.listar_agenda,
-    # "cancelar_evento": services.calendar.cancelar_evento,
-    # "recordatorio": services.state.recordatorio,
-    # "agregar_beta": services.state.agregar_beta,
-    # "listar_usuarios": services.state.listar_usuarios,
+
+class _Args(BaseModel):
+    # strict: JSON strings for dates/datetimes, exact decimals, no coercion.
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class Item(_Args):
+    monto: Monto
+    categoria: Categoria
+    nota: str | None = None
+
+
+class RegistrarGasto(_Args):
+    """Registra uno o varios gastos (append-only)."""
+
+    items: list[Item] = Field(min_length=1, max_length=20)
+    moneda: Moneda
+    fecha: date
+
+
+class RegistrarIngreso(_Args):
+    """Registra un ingreso (append-only)."""
+
+    monto: Monto
+    moneda: Moneda
+    fuente: str
+    fecha: date
+    nota: str | None = None
+
+
+class ResumenFinanzas(_Args):
+    """Resumen de gastos e ingresos del periodo."""
+
+    periodo: Literal["hoy", "semana", "mes"]
+
+
+class RecomendarPresupuesto(_Args):
+    """Compara gasto por categoría contra el presupuesto y sugiere ahorro."""
+
+    periodo: Literal["mes"]
+
+
+class CrearEvento(_Args):
+    """Crea un evento en el calendario (hora local del usuario)."""
+
+    titulo: str
+    inicio: datetime
+    fin: datetime | None = None
+    ubicacion: str | None = None
+    recordatorio_min: int | None = Field(default=None, ge=0, le=40320)
+
+
+class ListarAgenda(_Args):
+    """Lista los eventos del rango."""
+
+    rango: Literal["hoy", "manana", "semana"]
+
+
+class CancelarEvento(_Args):
+    """Cancela un evento por id (el usuario confirma con un botón)."""
+
+    evento_id: str
+
+
+class Recordatorio(_Args):
+    """Crea un recordatorio a una hora (hora local del usuario)."""
+
+    texto: str
+    cuando: datetime
+
+
+class Deshacer(_Args):
+    """Deshace un lote de registros; sin batch_id, el último (con confirmación)."""
+
+    batch_id: str | None = None
+
+
+class InvitarBeta(_Args):
+    """Solo owner: genera un código de invitación para un beta tester."""
+
+    nombre: str
+
+
+class ListarUsuarios(_Args):
+    """Solo owner: lista los usuarios permitidos."""
+
+
+# name -> (args model, "module:function"). Order is the order sent to the LLM.
+TOOLS: dict[str, tuple[type[_Args], str]] = {
+    "registrar_gasto": (RegistrarGasto, "assistant.services.sheets:registrar_gasto"),
+    "registrar_ingreso": (
+        RegistrarIngreso,
+        "assistant.services.sheets:registrar_ingreso",
+    ),
+    "resumen_finanzas": (
+        ResumenFinanzas,
+        "assistant.services.sheets:resumen_finanzas",
+    ),
+    "recomendar_presupuesto": (
+        RecomendarPresupuesto,
+        "assistant.services.budgets:recomendar_presupuesto",
+    ),
+    "crear_evento": (CrearEvento, "assistant.services.calendar:crear_evento"),
+    "listar_agenda": (ListarAgenda, "assistant.services.calendar:listar_agenda"),
+    "cancelar_evento": (
+        CancelarEvento,
+        "assistant.services.calendar:cancelar_evento",
+    ),
+    "recordatorio": (Recordatorio, "assistant.services.calendar:recordatorio"),
+    "deshacer": (Deshacer, "assistant.services.sheets:deshacer"),
+    "invitar_beta": (InvitarBeta, "assistant.services.state:invitar_beta"),
+    "listar_usuarios": (ListarUsuarios, "assistant.services.state:listar_usuarios"),
+}
+OWNER_ONLY = frozenset({"invitar_beta", "listar_usuarios"})
+
+# DeepSeek strict mode supports neither these keywords nor date formats.
+_DROP = {"title", "default", "format", "minLength", "maxLength", "minItems", "maxItems"}
+_DATE_PATTERNS = {
+    "date": r"^\d{4}-\d{2}-\d{2}$",
+    "date-time": r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}",
 }
 
 
-def is_allowlisted(name: str) -> bool:
-    return name in TOOLS
+def _strict_schema(node: Any, defs: dict[str, Any]) -> Any:
+    """Inline $refs, drop unsupported keywords, make every property required."""
+    if isinstance(node, list):
+        return [_strict_schema(n, defs) for n in node]
+    if not isinstance(node, dict):
+        return node
+    if "$ref" in node:
+        return _strict_schema(copy.deepcopy(defs[node["$ref"].split("/")[-1]]), defs)
+    out: dict[str, Any] = {}
+    for key, value in node.items():
+        if key == "properties":
+            out[key] = {k: _strict_schema(v, defs) for k, v in value.items()}
+        elif key == "format" and value in _DATE_PATTERNS:
+            out["pattern"] = _DATE_PATTERNS[value]
+        elif key not in _DROP and key != "$defs":
+            out[key] = _strict_schema(value, defs)
+    if out.get("type") == "object":
+        out.setdefault("properties", {})
+        out["required"] = list(out["properties"])
+        out["additionalProperties"] = False
+    return out
 
 
-def validate_args(name: str, args: dict[str, Any]) -> dict[str, Any]:
-    """Validate tool arguments against the declaration. Returns cleaned args.
+def _spec(name: str, model: type[_Args]) -> dict[str, Any]:
+    schema = model.model_json_schema()
+    params = _strict_schema(schema, schema.get("$defs", {}))
+    params.pop("description", None)  # already the function description
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": (model.__doc__ or "").strip(),
+            "parameters": params,
+            "strict": True,
+        },
+    }
 
-    Raises ValueError on invalid input. Placeholder: fill in per-tool coercion.
+
+# Built once at import (pure, deterministic): identical bytes on every request
+# so DeepSeek's prefix cache hits.
+TOOL_SPECS: list[dict[str, Any]] = [_spec(n, m) for n, (m, _) in TOOLS.items()]
+TOOLS_JSON = json.dumps(TOOL_SPECS, ensure_ascii=False, sort_keys=True)
+
+
+def validate_args(name: str, raw: str) -> _Args:
+    """Parse and validate a tool call. Raises ToolRejected; never runs anything."""
+    if name not in TOOLS:
+        raise ToolRejected("tool_not_allowlisted")
+    try:
+        return TOOLS[name][0].model_validate_json(raw or "{}")
+    except ValidationError as exc:
+        invalid_json = exc.errors()[0]["type"] == "json_invalid"
+        raise ToolRejected("invalid_json" if invalid_json else "invalid_args") from exc
+
+
+def _state() -> Any:
+    return importlib.import_module("assistant.services.state")
+
+
+def _run(ctx: ToolContext, name: str, args: _Args) -> str:
+    if name in OWNER_ONLY and ctx.rol != "owner":
+        raise ToolRejected("owner_only")
+    module, _, func = TOOLS[name][1].partition(":")
+    fn: Callable[..., str] = getattr(importlib.import_module(module), func)
+    return fn(ctx, **args.model_dump())
+
+
+def _confirm_question(name: str, args: _Args) -> str | None:
+    """The question to ask before running this call, or None to run it now."""
+    if name == "cancelar_evento":
+        return "¿Cancelo el evento?"
+    if name == "deshacer":
+        return "¿Deshago el último registro?"
+    if isinstance(args, RegistrarGasto):
+        total = sum((i.monto for i in args.items), Decimal(0))
+        if total > get_worker_settings().confirm_above:
+            return f"¿Registro {total:.2f} {args.moneda}?"
+    return None
+
+
+def buttons(token: str) -> list[list[tuple[str, str]]]:
+    return [[("Confirmar", f"ok:{token}"), ("Cancelar", f"no:{token}")]]
+
+
+def handle_call(ctx: ToolContext, name: str, raw: str) -> tuple[str, str | None]:
+    """Validate and run one tool call.
+
+    Returns ``(result, None)`` after running it, or ``(question, token)`` when
+    the call needs a confirmation turn and was stored as pending instead.
+    Raises ToolRejected for anything invalid or not allowed.
     """
-    if not is_allowlisted(name):
-        raise ValueError(f"tool not allowlisted: {name}")
-    return args
+    args = validate_args(name, raw)
+    if name in OWNER_ONLY and ctx.rol != "owner":
+        raise ToolRejected("owner_only")
+    question = _confirm_question(name, args)
+    if question is None:
+        return _run(ctx, name, args), None
+    token: str = _state().create_pending(
+        ctx.chat_id, {"tool": name, "args": args.model_dump(mode="json")}
+    )
+    return question, token
+
+
+def execute_pending(ctx: ToolContext, token: str) -> str:
+    """Run the call stored for an ``ok:<token>`` button (single use)."""
+    action = _state().pop_pending(ctx.chat_id, token)
+    if not action:
+        return "La confirmación expiró."
+    # Stored data crosses a trust boundary too: validate again before running.
+    name = str(action.get("tool", ""))
+    return _run(ctx, name, validate_args(name, json.dumps(action.get("args", {}))))
