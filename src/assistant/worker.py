@@ -35,6 +35,7 @@ ACK = 204
 LIMIT_REPLY = "Llegaste al límite por ahora. Intenta más tarde."
 WELCOME = "Hola. Escríbeme gastos, ingresos o citas y yo los registro."
 TEXT_ONLY = "Por ahora solo entiendo texto."
+FAILED_REPLY = "No pude hacerlo, intenta de nuevo."
 
 
 @app.get("/health")
@@ -56,7 +57,7 @@ async def push(request: Request) -> Response:
 
 def _route(payload: Any) -> int:
     if isinstance(payload, dict) and "job" in payload:
-        from assistant.jobs import run_job  # type: ignore[attr-defined]
+        from assistant.jobs import run_job
 
         run_job(str(payload["job"]))
         return ACK
@@ -103,7 +104,7 @@ def handle_update(msg: InboundMessage, settings: WorkerSettings) -> int:
         return ACK
 
     # 2. The turn. LLMUnavailable -> 503 so Pub/Sub retries with backoff.
-    from assistant.llm import client  # type: ignore[attr-defined]
+    from assistant.llm import client
 
     started = time.monotonic()
     try:
@@ -111,12 +112,20 @@ def handle_update(msg: InboundMessage, settings: WorkerSettings) -> int:
     except client.LLMUnavailable:
         logger.warning("llm_unavailable update_id=%s", msg.update_id)
         return 503
+    except Exception as exc:
+        # Any other failure is acknowledged: a Pub/Sub retry would pay for the
+        # turn again and could repeat a non-idempotent write (calendar).
+        logger.error(
+            "turn_failed update_id=%s error=%s", msg.update_id, type(exc).__name__
+        )
+        _send(channel, msg, FAILED_REPLY)
+        return ACK
 
     # 3-5. Reply, account, trace.
     _send(channel, msg, result.reply, result.keyboard)
     state.add_llm_spend(msg.chat_id, result.cost_usd)
     state.append_history(msg.chat_id, result.messages)
-    from assistant.observability import trace  # type: ignore[attr-defined]
+    from assistant.observability import trace
 
     trace.record_turn(result, int((time.monotonic() - started) * 1000), msg.text)
     return ACK
@@ -141,9 +150,18 @@ def _callback(
         logger.warning("answer_callback_failed update_id=%s", msg.update_id)
     action, _, token = (msg.callback_data or "").partition(":")
     if action == "ok":
-        from assistant.llm.tools import execute_pending  # type: ignore[attr-defined]
+        from assistant.llm.tools import execute_pending
 
-        _send(channel, msg, execute_pending(ctx, token))
+        try:
+            reply = execute_pending(ctx, token)
+        except Exception as exc:
+            logger.error(
+                "pending_failed update_id=%s error=%s",
+                msg.update_id,
+                type(exc).__name__,
+            )
+            reply = FAILED_REPLY
+        _send(channel, msg, reply)
     elif action == "no":
         state.pop_pending(msg.chat_id, token)
         _send(channel, msg, "Cancelado.")

@@ -206,3 +206,11 @@ def test_callback_no(st, tg, caplog) -> None:
 def test_callback_unknown_action(st, tg) -> None:
     assert client.post("/push", json=envelope(callback("zz"))).status_code == 204
     assert sent_texts(tg) == []
+
+
+def test_unexpected_turn_error_is_acknowledged(st, llm, tg) -> None:
+    # A retry would pay for the turn again and could repeat a calendar write.
+    llm.run_turn.side_effect = RuntimeError("sheets down")
+    assert client.post("/push", json=envelope(message())).status_code == 204
+    assert sent_texts(tg) == [worker.FAILED_REPLY]
+    st.add_llm_spend.assert_not_called()

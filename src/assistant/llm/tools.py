@@ -204,8 +204,9 @@ def _spec(name: str, model: type[_Args]) -> dict[str, Any]:
         "function": {
             "name": name,
             "description": (model.__doc__ or "").strip(),
+            # No "strict": DeepSeek only honours it on the /beta endpoint; the
+            # pydantic models are the real guard.
             "parameters": params,
-            "strict": True,
         },
     }
 

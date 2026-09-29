@@ -138,13 +138,13 @@ def test_invalid_calls_rejected(name, raw, code) -> None:
         validate_args(name, raw)
 
 
-def test_tool_specs_are_strict_and_cover_categories() -> None:
+def test_tool_specs_are_closed_and_cover_categories() -> None:
     names = [s["function"]["name"] for s in tools.TOOL_SPECS]
     assert names == list(tools.TOOLS)
     assert "$ref" not in tools.TOOLS_JSON and "format" not in tools.TOOLS_JSON
     for spec in tools.TOOL_SPECS:
         params = spec["function"]["parameters"]
-        assert spec["function"]["strict"] is True
+        assert "strict" not in spec["function"]
         assert params["additionalProperties"] is False
         assert params["required"] == list(params["properties"])
     item = tools.TOOL_SPECS[0]["function"]["parameters"]["properties"]["items"]
