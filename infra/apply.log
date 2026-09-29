@@ -1,0 +1,251 @@
+module.budget_guard.data.archive_file.source: Reading...
+module.budget_guard.data.archive_file.source: Read complete after 0s [id=7a5a4daa7b5faae57de0bbc6dfee0952ef709b0c]
+data.google_project.this: Reading...
+module.budget_guard.data.google_project.this: Reading...
+module.budget_guard.google_project_service.apis["run.googleapis.com"]: Refreshing state... [id=jd-botjonh/run.googleapis.com]
+module.budget_guard.google_project_service.apis["cloudbuild.googleapis.com"]: Refreshing state... [id=jd-botjonh/cloudbuild.googleapis.com]
+module.budget_guard.google_project_service.apis["pubsub.googleapis.com"]: Refreshing state... [id=jd-botjonh/pubsub.googleapis.com]
+module.budget_guard.google_project_service.apis["eventarc.googleapis.com"]: Refreshing state... [id=jd-botjonh/eventarc.googleapis.com]
+module.budget_guard.google_project_service.apis["cloudbilling.googleapis.com"]: Refreshing state... [id=jd-botjonh/cloudbilling.googleapis.com]
+module.budget_guard.google_project_service.apis["billingbudgets.googleapis.com"]: Refreshing state... [id=jd-botjonh/billingbudgets.googleapis.com]
+google_project_service.apis["artifactregistry.googleapis.com"]: Refreshing state... [id=jd-botjonh/artifactregistry.googleapis.com]
+module.budget_guard.google_project_service.apis["cloudfunctions.googleapis.com"]: Refreshing state... [id=jd-botjonh/cloudfunctions.googleapis.com]
+module.budget_guard.data.google_project.this: Read complete after 1s [id=projects/jd-botjonh]
+google_project_service.apis["cloudbuild.googleapis.com"]: Refreshing state... [id=jd-botjonh/cloudbuild.googleapis.com]
+data.google_project.this: Read complete after 1s [id=projects/jd-botjonh]
+google_project_service.apis["sheets.googleapis.com"]: Refreshing state... [id=jd-botjonh/sheets.googleapis.com]
+google_project_service.apis["run.googleapis.com"]: Refreshing state... [id=jd-botjonh/run.googleapis.com]
+google_project_service.apis["firestore.googleapis.com"]: Refreshing state... [id=jd-botjonh/firestore.googleapis.com]
+google_project_service.apis["iam.googleapis.com"]: Refreshing state... [id=jd-botjonh/iam.googleapis.com]
+google_project_service.apis["pubsub.googleapis.com"]: Refreshing state... [id=jd-botjonh/pubsub.googleapis.com]
+google_project_service.apis["iamcredentials.googleapis.com"]: Refreshing state... [id=jd-botjonh/iamcredentials.googleapis.com]
+google_project_service.apis["calendar-json.googleapis.com"]: Refreshing state... [id=jd-botjonh/calendar-json.googleapis.com]
+google_project_service.apis["cloudresourcemanager.googleapis.com"]: Refreshing state... [id=jd-botjonh/cloudresourcemanager.googleapis.com]
+google_project_service.apis["storage.googleapis.com"]: Refreshing state... [id=jd-botjonh/storage.googleapis.com]
+google_project_service.apis["cloudscheduler.googleapis.com"]: Refreshing state... [id=jd-botjonh/cloudscheduler.googleapis.com]
+google_project_service.apis["secretmanager.googleapis.com"]: Refreshing state... [id=jd-botjonh/secretmanager.googleapis.com]
+google_project_service.apis["sts.googleapis.com"]: Refreshing state... [id=jd-botjonh/sts.googleapis.com]
+module.budget_guard.google_pubsub_topic.budget: Refreshing state... [id=projects/jd-botjonh/topics/budget-alerts]
+module.budget_guard.google_billing_budget.monthly: Refreshing state... [id=billingAccounts/012DD6-204F73-D28EB3/budgets/13103da3-cfda-408f-89ee-1d842b7e62c2]
+google_iam_workload_identity_pool.github: Refreshing state... [id=projects/jd-botjonh/locations/global/workloadIdentityPools/github]
+google_firestore_database.db: Refreshing state... [id=projects/jd-botjonh/databases/(default)]
+google_pubsub_topic.cron: Refreshing state... [id=projects/jd-botjonh/topics/assistant-cron]
+google_pubsub_topic.updates: Refreshing state... [id=projects/jd-botjonh/topics/assistant-updates]
+google_secret_manager_secret.secret["assistant-bot-token"]: Refreshing state... [id=projects/jd-botjonh/secrets/assistant-bot-token]
+google_secret_manager_secret.secret["assistant-deepseek-key"]: Refreshing state... [id=projects/jd-botjonh/secrets/assistant-deepseek-key]
+google_storage_bucket.functions: Refreshing state... [id=jd-botjonh-functions]
+google_secret_manager_secret.secret["assistant-webhook-path"]: Refreshing state... [id=projects/jd-botjonh/secrets/assistant-webhook-path]
+google_artifact_registry_repository.images: Refreshing state... [id=projects/jd-botjonh/locations/us-central1/repositories/assistant]
+google_storage_bucket.backup: Refreshing state... [id=jd-botjonh-backup]
+google_secret_manager_secret.secret["assistant-webhook-secret"]: Refreshing state... [id=projects/jd-botjonh/secrets/assistant-webhook-secret]
+google_service_account.sa["deploy"]: Refreshing state... [id=projects/jd-botjonh/serviceAccounts/assistant-deploy@jd-botjonh.iam.gserviceaccount.com]
+google_service_account.sa["webhook"]: Refreshing state... [id=projects/jd-botjonh/serviceAccounts/assistant-webhook@jd-botjonh.iam.gserviceaccount.com]
+google_service_account.sa["worker"]: Refreshing state... [id=projects/jd-botjonh/serviceAccounts/assistant-worker@jd-botjonh.iam.gserviceaccount.com]
+google_pubsub_topic_iam_member.scheduler_publishes_cron: Refreshing state... [id=projects/jd-botjonh/topics/assistant-cron/roles/pubsub.publisher/serviceAccount:service-778246602631@gcp-sa-cloudscheduler.iam.gserviceaccount.com]
+google_cloud_scheduler_job.job["checkin"]: Refreshing state... [id=projects/jd-botjonh/locations/us-central1/jobs/assistant-checkin]
+google_cloud_scheduler_job.job["weekly"]: Refreshing state... [id=projects/jd-botjonh/locations/us-central1/jobs/assistant-weekly]
+google_cloud_scheduler_job.job["digest"]: Refreshing state... [id=projects/jd-botjonh/locations/us-central1/jobs/assistant-digest]
+google_iam_workload_identity_pool_provider.github: Refreshing state... [id=projects/jd-botjonh/locations/global/workloadIdentityPools/github/providers/github-oidc]
+module.budget_guard.google_storage_bucket_object.source: Refreshing state... [id=jd-botjonh-functions-functions/budget-guard-274a6df31b158c464fe2aae50237c119.zip]
+google_service_account_iam_member.github_impersonates_deploy: Refreshing state... [id=projects/jd-botjonh/serviceAccounts/assistant-deploy@jd-botjonh.iam.gserviceaccount.com/roles/iam.workloadIdentityUser/principalSet://iam.googleapis.com/projects/778246602631/locations/global/workloadIdentityPools/github/attribute.repository/juandsep/botjonh]
+google_storage_bucket_iam_member.worker_writes_backup: Refreshing state... [id=b/jd-botjonh-backup/roles/storage.objectCreator/serviceAccount:assistant-worker@jd-botjonh.iam.gserviceaccount.com]
+google_project_iam_member.worker["roles/datastore.user"]: Refreshing state... [id=jd-botjonh/roles/datastore.user/serviceAccount:assistant-worker@jd-botjonh.iam.gserviceaccount.com]
+google_secret_manager_secret_iam_member.webhook_reads_secrets["assistant-webhook-secret"]: Refreshing state... [id=projects/jd-botjonh/secrets/assistant-webhook-secret/roles/secretmanager.secretAccessor/serviceAccount:assistant-webhook@jd-botjonh.iam.gserviceaccount.com]
+google_secret_manager_secret_iam_member.webhook_reads_secrets["assistant-webhook-path"]: Refreshing state... [id=projects/jd-botjonh/secrets/assistant-webhook-path/roles/secretmanager.secretAccessor/serviceAccount:assistant-webhook@jd-botjonh.iam.gserviceaccount.com]
+google_pubsub_topic_iam_member.webhook_publishes_updates: Refreshing state... [id=projects/jd-botjonh/topics/assistant-updates/roles/pubsub.publisher/serviceAccount:assistant-webhook@jd-botjonh.iam.gserviceaccount.com]
+google_service_account_iam_member.deploy_acts_as["webhook"]: Refreshing state... [id=projects/jd-botjonh/serviceAccounts/assistant-webhook@jd-botjonh.iam.gserviceaccount.com/roles/iam.serviceAccountUser/serviceAccount:assistant-deploy@jd-botjonh.iam.gserviceaccount.com]
+google_service_account_iam_member.deploy_acts_as["worker"]: Refreshing state... [id=projects/jd-botjonh/serviceAccounts/assistant-worker@jd-botjonh.iam.gserviceaccount.com/roles/iam.serviceAccountUser/serviceAccount:assistant-deploy@jd-botjonh.iam.gserviceaccount.com]
+google_project_iam_member.webhook_firestore: Refreshing state... [id=jd-botjonh/roles/datastore.user/serviceAccount:assistant-webhook@jd-botjonh.iam.gserviceaccount.com]
+google_secret_manager_secret_iam_member.worker_reads_secrets["assistant-deepseek-key"]: Refreshing state... [id=projects/jd-botjonh/secrets/assistant-deepseek-key/roles/secretmanager.secretAccessor/serviceAccount:assistant-worker@jd-botjonh.iam.gserviceaccount.com]
+google_secret_manager_secret_iam_member.worker_reads_secrets["assistant-bot-token"]: Refreshing state... [id=projects/jd-botjonh/secrets/assistant-bot-token/roles/secretmanager.secretAccessor/serviceAccount:assistant-worker@jd-botjonh.iam.gserviceaccount.com]
+google_project_iam_member.deploy["roles/run.admin"]: Refreshing state... [id=jd-botjonh/roles/run.admin/serviceAccount:assistant-deploy@jd-botjonh.iam.gserviceaccount.com]
+google_project_iam_member.deploy["roles/artifactregistry.writer"]: Refreshing state... [id=jd-botjonh/roles/artifactregistry.writer/serviceAccount:assistant-deploy@jd-botjonh.iam.gserviceaccount.com]
+google_project_iam_member.worker_invokes_run: Refreshing state... [id=jd-botjonh/roles/run.invoker/serviceAccount:assistant-worker@jd-botjonh.iam.gserviceaccount.com]
+
+Terraform used the selected providers to generate the following execution
+plan. Resource actions are indicated with the following symbols:
+  + create
+
+Terraform will perform the following actions:
+
+  # module.budget_guard.google_cloudfunctions2_function.guard will be created
+  + resource "google_cloudfunctions2_function" "guard" {
+      + effective_labels = {
+          + "goog-terraform-provisioned" = "true"
+        }
+      + environment      = (known after apply)
+      + id               = (known after apply)
+      + location         = "us-central1"
+      + name             = "billing-guard"
+      + project          = "jd-botjonh"
+      + state            = (known after apply)
+      + terraform_labels = {
+          + "goog-terraform-provisioned" = "true"
+        }
+      + update_time      = (known after apply)
+      + url              = (known after apply)
+
+      + build_config {
+          + build                 = (known after apply)
+          + docker_repository     = (known after apply)
+          + entry_point           = "stop_billing"
+          + environment_variables = (known after apply)
+          + runtime               = "python312"
+          + service_account       = (known after apply)
+
+          + automatic_update_policy (known after apply)
+
+          + source {
+              + storage_source {
+                  + bucket     = "jd-botjonh-functions"
+                  + generation = (known after apply)
+                  + object     = "functions/budget-guard-274a6df31b158c464fe2aae50237c119.zip"
+                }
+            }
+        }
+
+      + event_trigger {
+          + event_type            = "google.cloud.pubsub.topic.v1.messagePublished"
+          + pubsub_topic          = "projects/jd-botjonh/topics/budget-alerts"
+          + retry_policy          = "RETRY_POLICY_RETRY"
+          + service_account_email = "billing-guard@jd-botjonh.iam.gserviceaccount.com"
+          + trigger               = (known after apply)
+          + trigger_region        = "us-central1"
+        }
+
+      + service_config {
+          + all_traffic_on_latest_revision   = true
+          + available_cpu                    = (known after apply)
+          + available_memory                 = "256M"
+          + environment_variables            = {
+              + "PROJECT_ID" = "jd-botjonh"
+            }
+          + gcf_uri                          = (known after apply)
+          + ingress_settings                 = "ALLOW_ALL"
+          + max_instance_count               = 1
+          + max_instance_request_concurrency = (known after apply)
+          + service                          = (known after apply)
+          + service_account_email            = "billing-guard@jd-botjonh.iam.gserviceaccount.com"
+          + timeout_seconds                  = (known after apply)
+          + uri                              = (known after apply)
+        }
+    }
+
+  # module.budget_guard.google_project_iam_member.builder["roles/artifactregistry.writer"] will be created
+  + resource "google_project_iam_member" "builder" {
+      + etag    = (known after apply)
+      + id      = (known after apply)
+      + member  = "serviceAccount:billing-guard-builder@jd-botjonh.iam.gserviceaccount.com"
+      + project = "jd-botjonh"
+      + role    = "roles/artifactregistry.writer"
+    }
+
+  # module.budget_guard.google_project_iam_member.builder["roles/logging.logWriter"] will be created
+  + resource "google_project_iam_member" "builder" {
+      + etag    = (known after apply)
+      + id      = (known after apply)
+      + member  = "serviceAccount:billing-guard-builder@jd-botjonh.iam.gserviceaccount.com"
+      + project = "jd-botjonh"
+      + role    = "roles/logging.logWriter"
+    }
+
+  # module.budget_guard.google_project_iam_member.builder["roles/storage.objectViewer"] will be created
+  + resource "google_project_iam_member" "builder" {
+      + etag    = (known after apply)
+      + id      = (known after apply)
+      + member  = "serviceAccount:billing-guard-builder@jd-botjonh.iam.gserviceaccount.com"
+      + project = "jd-botjonh"
+      + role    = "roles/storage.objectViewer"
+    }
+
+  # module.budget_guard.google_project_iam_member.guard["roles/billing.projectManager"] will be created
+  + resource "google_project_iam_member" "guard" {
+      + etag    = (known after apply)
+      + id      = (known after apply)
+      + member  = "serviceAccount:billing-guard@jd-botjonh.iam.gserviceaccount.com"
+      + project = "jd-botjonh"
+      + role    = "roles/billing.projectManager"
+    }
+
+  # module.budget_guard.google_project_iam_member.guard["roles/run.invoker"] will be created
+  + resource "google_project_iam_member" "guard" {
+      + etag    = (known after apply)
+      + id      = (known after apply)
+      + member  = "serviceAccount:billing-guard@jd-botjonh.iam.gserviceaccount.com"
+      + project = "jd-botjonh"
+      + role    = "roles/run.invoker"
+    }
+
+  # module.budget_guard.google_service_account.builder will be created
+  + resource "google_service_account" "builder" {
+      + account_id   = "billing-guard-builder"
+      + disabled     = false
+      + display_name = "Builds the billing-guard function"
+      + email        = "billing-guard-builder@jd-botjonh.iam.gserviceaccount.com"
+      + id           = (known after apply)
+      + member       = "serviceAccount:billing-guard-builder@jd-botjonh.iam.gserviceaccount.com"
+      + name         = (known after apply)
+      + project      = "jd-botjonh"
+      + unique_id    = (known after apply)
+    }
+
+  # module.budget_guard.google_service_account.guard will be created
+  + resource "google_service_account" "guard" {
+      + account_id   = "billing-guard"
+      + disabled     = false
+      + display_name = "Unlinks billing when the budget is exceeded"
+      + email        = "billing-guard@jd-botjonh.iam.gserviceaccount.com"
+      + id           = (known after apply)
+      + member       = "serviceAccount:billing-guard@jd-botjonh.iam.gserviceaccount.com"
+      + name         = (known after apply)
+      + project      = "jd-botjonh"
+      + unique_id    = (known after apply)
+    }
+
+Plan: 8 to add, 0 to change, 0 to destroy.
+module.budget_guard.google_service_account.guard: Creating...
+module.budget_guard.google_service_account.builder: Creating...
+module.budget_guard.google_service_account.builder: Still creating... [00m10s elapsed]
+module.budget_guard.google_service_account.guard: Still creating... [00m10s elapsed]
+module.budget_guard.google_service_account.guard: Creation complete after 13s [id=projects/jd-botjonh/serviceAccounts/billing-guard@jd-botjonh.iam.gserviceaccount.com]
+module.budget_guard.google_project_iam_member.guard["roles/run.invoker"]: Creating...
+module.budget_guard.google_project_iam_member.guard["roles/billing.projectManager"]: Creating...
+module.budget_guard.google_service_account.builder: Creation complete after 13s [id=projects/jd-botjonh/serviceAccounts/billing-guard-builder@jd-botjonh.iam.gserviceaccount.com]
+module.budget_guard.google_project_iam_member.builder["roles/artifactregistry.writer"]: Creating...
+module.budget_guard.google_project_iam_member.builder["roles/logging.logWriter"]: Creating...
+module.budget_guard.google_project_iam_member.builder["roles/storage.objectViewer"]: Creating...
+module.budget_guard.google_project_iam_member.guard["roles/billing.projectManager"]: Creation complete after 8s [id=jd-botjonh/roles/billing.projectManager/serviceAccount:billing-guard@jd-botjonh.iam.gserviceaccount.com]
+module.budget_guard.google_project_iam_member.guard["roles/run.invoker"]: Creation complete after 8s [id=jd-botjonh/roles/run.invoker/serviceAccount:billing-guard@jd-botjonh.iam.gserviceaccount.com]
+module.budget_guard.google_project_iam_member.builder["roles/logging.logWriter"]: Creation complete after 9s [id=jd-botjonh/roles/logging.logWriter/serviceAccount:billing-guard-builder@jd-botjonh.iam.gserviceaccount.com]
+module.budget_guard.google_project_iam_member.builder["roles/storage.objectViewer"]: Creation complete after 9s [id=jd-botjonh/roles/storage.objectViewer/serviceAccount:billing-guard-builder@jd-botjonh.iam.gserviceaccount.com]
+module.budget_guard.google_project_iam_member.builder["roles/artifactregistry.writer"]: Creation complete after 9s [id=jd-botjonh/roles/artifactregistry.writer/serviceAccount:billing-guard-builder@jd-botjonh.iam.gserviceaccount.com]
+module.budget_guard.google_cloudfunctions2_function.guard: Creating...
+module.budget_guard.google_cloudfunctions2_function.guard: Still creating... [00m10s elapsed]
+module.budget_guard.google_cloudfunctions2_function.guard: Still creating... [00m20s elapsed]
+module.budget_guard.google_cloudfunctions2_function.guard: Still creating... [00m30s elapsed]
+module.budget_guard.google_cloudfunctions2_function.guard: Still creating... [00m40s elapsed]
+module.budget_guard.google_cloudfunctions2_function.guard: Still creating... [00m50s elapsed]
+module.budget_guard.google_cloudfunctions2_function.guard: Still creating... [01m00s elapsed]
+module.budget_guard.google_cloudfunctions2_function.guard: Still creating... [01m10s elapsed]
+module.budget_guard.google_cloudfunctions2_function.guard: Still creating... [01m20s elapsed]
+module.budget_guard.google_cloudfunctions2_function.guard: Still creating... [01m30s elapsed]
+module.budget_guard.google_cloudfunctions2_function.guard: Still creating... [01m40s elapsed]
+module.budget_guard.google_cloudfunctions2_function.guard: Creation complete after 1m48s [id=projects/jd-botjonh/locations/us-central1/functions/billing-guard]
+
+Apply complete! Resources: 8 added, 0 changed, 0 destroyed.
+
+Outputs:
+
+github_variables = {
+  "BACKUP_BUCKET" = "jd-botjonh-backup"
+  "GCP_ARTIFACT_REPO" = "assistant"
+  "GCP_DEPLOY_SA" = "assistant-deploy@jd-botjonh.iam.gserviceaccount.com"
+  "GCP_PROJECT_ID" = "jd-botjonh"
+  "GCP_REGION" = "us-central1"
+  "GCP_WEBHOOK_SA" = "assistant-webhook@jd-botjonh.iam.gserviceaccount.com"
+  "GCP_WIF_PROVIDER" = "projects/778246602631/locations/global/workloadIdentityPools/github/providers/github-oidc"
+  "GCP_WORKER_SA" = "assistant-worker@jd-botjonh.iam.gserviceaccount.com"
+}
+mlflow_clients = {
+  "worker" = "assistant-worker@jd-botjonh.iam.gserviceaccount.com"
+}
