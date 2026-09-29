@@ -1,4 +1,4 @@
-# personal-assistant-bot
+# botjonh
 
 A single-user Telegram bot that is a finance advisor and a calendar: it logs
 expenses and income to Google Sheets, recommends budgets to save, schedules
@@ -7,8 +7,8 @@ proactive reminders. It runs for one owner plus a small allowlist of beta
 testers, on GCP for about $1–2/month (LLM tokens only).
 
 - **Channel:** Telegram Bot API (webhook → Cloud Run).
-- **LLM:** Gemini 2.5 Flash on the paid tier (the free tier may train on the
-  data).
+- **LLM:** DeepSeek `deepseek-flash` over its HTTP API (tool calling,
+  automatic prefix cache). Minimal context is sent: never the full ledger.
 - **State:** Firestore (users, idempotency, preferences, budgets); the finance
   ledger lives in Google Sheets so it stays readable on the phone.
 - **Observability:** the shared MLflow server in `jd-portfolio-shared`
@@ -20,7 +20,7 @@ testers, on GCP for about $1–2/month (LLM tokens only).
 Telegram ──webhook──▶ assistant-api (Cloud Run) ──▶ Pub/Sub assistant-updates ──▶ assistant-worker (Cloud Run)
 Cloud Scheduler ─────────────────────────────────▶ Pub/Sub assistant-cron ───────▶ assistant-worker
                                                                                          │
-                                            Gemini · Firestore · Sheets · Calendar · MLflow
+                                            DeepSeek · Firestore · Sheets · Calendar · MLflow
 ```
 
 Two Cloud Run services on purpose: Cloud Run does not guarantee CPU between
@@ -32,13 +32,13 @@ See [PLAN.md](PLAN.md) (Spanish) for the full plan, costs and roadmap.
 
 ## Stack
 
-FastAPI, `google-genai` (Gemini), `google-cloud-*` (Firestore, Pub/Sub, Secret
-Manager), `google-api-python-client` (Sheets/Calendar), MLflow, uv + ruff + mypy
+FastAPI, httpx (DeepSeek, Telegram), `google-cloud-*` (Firestore, Pub/Sub,
+Storage), `google-api-python-client` (Sheets/Calendar), `mlflow-skinny`, uv + ruff + mypy
 + pytest, Terraform, GitHub Actions.
 
 ## Run locally
 
-Requires [uv](https://docs.astral.sh/uv/).
+Requires [uv](https://docs.astral.sh/uv/) and Python 3.12.
 
 ```bash
 uv sync
@@ -71,7 +71,7 @@ see [Configuration](#configuration).
    read -rs TOKEN && printf '%s' "$TOKEN" | gcloud secrets versions add assistant-bot-token --data-file=- --project "$PROJECT_ID"
    openssl rand -hex 32 | tr -d '\n' | gcloud secrets versions add assistant-webhook-secret --data-file=-
    openssl rand -hex 32 | tr -d '\n' | gcloud secrets versions add assistant-webhook-path --data-file=-
-   read -rs KEY   && printf '%s' "$KEY"  | gcloud secrets versions add assistant-gemini-key --data-file=-
+   read -rs KEY   && printf '%s' "$KEY"  | gcloud secrets versions add assistant-deepseek-key --data-file=-
    ```
 
 3. Share one spreadsheet and one dedicated calendar with the `assistant-worker`
@@ -80,7 +80,7 @@ see [Configuration](#configuration).
 
 4. Configure GitHub: set the values from `terraform output github_variables`
    plus the environment-specific variables, then create the `staging`
-   (branch `dev`) and `production` (branch `main`, required reviewer)
+   (branch `dev`) and `production` (branch `main`)
    environments.
 
 5. Add yourself as the owner (your chat id from @userinfobot), with ADC
@@ -104,7 +104,7 @@ see [Configuration](#configuration).
    ```
 
 Every merge into `dev` deploys `assistant-api-staging` / `assistant-worker-staging`;
-merging `dev` into `main` deploys production after approval.
+merging `dev` into `main` deploys production.
 
 ## Configuration
 
@@ -116,12 +116,14 @@ All secrets come from Secret Manager; settings from environment variables.
 | `TELEGRAM_BOT_TOKEN` | Secret `assistant-bot-token` |
 | `WEBHOOK_SECRET_TOKEN` | Secret `assistant-webhook-secret` (X-Telegram-Bot-Api-Secret-Token) |
 | `WEBHOOK_PATH` | Secret `assistant-webhook-path` (webhook route) |
-| `GEMINI_API_KEY` | Secret `assistant-gemini-key` |
+| `DEEPSEEK_API_KEY` | Secret `assistant-deepseek-key` |
 | `SPREADSHEET_ID` | Finance ledger (Gastos, Ingresos) |
 | `CALENDAR_ID` | Dedicated calendar |
 | `MLFLOW_TRACKING_URI` | Shared MLflow server |
-| `GEMINI_MODEL` | Default `gemini-2.5-flash` |
-| `MAX_LLM_USD_PER_DAY` | Daily LLM spend cap (fails closed) |
+| `LLM_MODEL` | Default `deepseek-flash` |
+| `BACKUP_BUCKET` | Weekly JSON backup (from `terraform output`) |
+| `MAX_MSGS_PER_MINUTE` | Per-chat rate limit (default 10) |
+| `MAX_LLM_USD_PER_DAY` | Daily LLM spend cap per chat, default 0.10 (fails closed) |
 
 ## Contributing
 
