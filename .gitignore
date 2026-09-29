@@ -35,3 +35,4 @@ infra/*.tfstate*
 infra/terraform.tfvars
 infra/tfplan
 .claude/settings.local.json
+infra/apply.log

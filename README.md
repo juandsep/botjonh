@@ -83,7 +83,21 @@ see [Configuration](#configuration).
    (branch `dev`) and `production` (branch `main`)
    environments.
 
-5. Register the webhook and start using the bot:
+5. Add yourself as the owner (your chat id from @userinfobot), with ADC
+   pointed at the project. Owners invite beta users from the chat; a beta joins
+   with `/start <code>`:
+
+   ```bash
+   GCP_PROJECT_ID="$PROJECT_ID" uv run python -m assistant.admin add-owner <chat_id> <nombre>
+   for c in processed invites rate spend pending; do
+     gcloud firestore fields ttls update expire_at --collection-group="$c" --enable-ttl --async
+   done
+   ```
+
+   The loop enables TTL cleanup of the dedup markers, invites, counters and
+   pending confirmations.
+
+6. Register the webhook and start using the bot:
 
    ```bash
    curl "https://api.telegram.org/bot$TOKEN/setWebhook?url=$API_URL/tg/$PATH&secret_token=$SECRET"
