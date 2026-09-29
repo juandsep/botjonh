@@ -1,4 +1,4 @@
-FROM python:3.12-slim AS builder
+FROM python:3.14-slim AS builder
 
 # Pinned uv release, not `latest`: the build must not change under our feet.
 COPY --from=ghcr.io/astral-sh/uv:0.12.18 /uv /bin/uv
@@ -11,7 +11,7 @@ RUN uv sync --locked --no-install-project
 COPY src ./src
 RUN uv sync --locked
 
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
