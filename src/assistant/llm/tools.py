@@ -18,7 +18,7 @@ TOOL_DECLARATIONS: list[dict[str, Any]] = [
         "parameters": {
             "type": "object",
             "properties": {
-                "monto": {"type": "number", "description": "Monto del gasto."},
+                "monto": {"type": "number"},
                 "moneda": {
                     "type": "string",
                     "description": "Código ISO 4217, p.ej. USD.",
@@ -64,7 +64,9 @@ TOOL_DECLARATIONS: list[dict[str, Any]] = [
     },
     {
         "name": "recomendar_presupuesto",
-        "description": "Compara gasto por categoría contra el presupuesto y sugiere dónde ahorrar.",
+        "description": (
+            "Compara gasto por categoría contra el presupuesto y sugiere dónde ahorrar."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
