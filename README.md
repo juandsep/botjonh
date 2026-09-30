@@ -1,7 +1,7 @@
 # botjonh
 
 A single-user Telegram bot that is a finance advisor and a calendar: it logs
-expenses and income to Google Sheets, recommends budgets to save, schedules
+expenses and income to a Firestore ledger, recommends budgets to save, schedules
 appointments (medical, personal) on a dedicated Google Calendar, and sends
 proactive reminders. It runs for one owner plus a small allowlist of beta
 testers, on GCP for about $1–2/month (LLM tokens only).
@@ -9,8 +9,10 @@ testers, on GCP for about $1–2/month (LLM tokens only).
 - **Channel:** Telegram Bot API (webhook → Cloud Run).
 - **LLM:** DeepSeek `deepseek-flash` over its HTTP API (tool calling,
   automatic prefix cache). Minimal context is sent: never the full ledger.
-- **State:** Firestore (users, idempotency, preferences, budgets); the finance
-  ledger lives in Google Sheets so it stays readable on the phone.
+- **State:** Firestore (users, idempotency, preferences, budgets, and the
+  append-only finance ledger).
+- **Reporting:** the ledger is exported daily as CSV to GCS; a BigQuery external
+  table over those files feeds a Looker Studio dashboard, at about $0.
 - **Observability:** the shared MLflow server in `jd-portfolio-shared`
   (prompt hash, tokens, latency, cost per turn; message text hashed).
 
@@ -20,7 +22,7 @@ testers, on GCP for about $1–2/month (LLM tokens only).
 Telegram ──webhook──▶ assistant-api (Cloud Run) ──▶ Pub/Sub assistant-updates ──▶ assistant-worker (Cloud Run)
 Cloud Scheduler ─────────────────────────────────▶ Pub/Sub assistant-cron ───────▶ assistant-worker
                                                                                          │
-                                            DeepSeek · Firestore · Sheets · Calendar · MLflow
+                                            DeepSeek · Firestore · Calendar · MLflow
 ```
 
 Two Cloud Run services on purpose: Cloud Run does not guarantee CPU between
@@ -33,7 +35,7 @@ See [PLAN.md](PLAN.md) (Spanish) for the full plan, costs and roadmap.
 ## Stack
 
 FastAPI, httpx (DeepSeek, Telegram), `google-cloud-*` (Firestore, Pub/Sub,
-Storage), `google-api-python-client` (Sheets/Calendar), `mlflow-skinny`, uv + ruff + mypy
+Storage), `google-api-python-client` (Calendar), `mlflow-skinny`, uv + ruff + mypy
 + pytest, Terraform, GitHub Actions.
 
 ## Run locally
@@ -74,9 +76,8 @@ see [Configuration](#configuration).
    read -rs KEY   && printf '%s' "$KEY"  | gcloud secrets versions add assistant-deepseek-key --data-file=-
    ```
 
-3. Share one spreadsheet and one dedicated calendar with the `assistant-worker`
-   service account, then add their ids as `SPREADSHEET_ID` and `CALENDAR_ID`
-   repository variables.
+3. Share one dedicated calendar with the `assistant-worker` service account,
+   then add its id as the `CALENDAR_ID` repository variable.
 
 4. Configure GitHub: set the values from `terraform output github_variables`
    plus the environment-specific variables, then create the `staging`
@@ -106,6 +107,42 @@ see [Configuration](#configuration).
 Every merge into `dev` deploys `assistant-api-staging` / `assistant-worker-staging`;
 merging `dev` into `main` deploys production.
 
+## Finance ledger and reporting
+
+Firestore is the source of truth: `ledger/{chat_id}/movimientos/{doc_id}`, one
+append-only document per movement with `fecha` (ISO date), `monto` (string,
+2 decimals), `moneda`, `categoria` (gasto) or `fuente` (ingreso), `tipo_mov`
+(`gasto`|`ingreso`), `nota`, `batch_id`, `update_id`, `tipo`
+(`registro`|`reverso`) and `creado`. Doc ids make writes idempotent: gasto
+`{update_id}-{i}`, ingreso `{update_id}-i0`, undo `{batch_id}-r{i}` (negative
+`reverso` copies; nothing is edited or deleted).
+
+Every morning the `digest` job exports the previous day's writes (America/Panama)
+to `gs://$BACKUP_BUCKET/ledger/mes=YYYY-MM/YYYY-MM-DD.csv` with the header
+`fecha,chat_id,tipo_mov,categoria,monto,moneda,nota,batch_id,tipo`. Files are
+create-only and kept forever; the weekly JSON backup lives under `backup/` with a
+90-day lifecycle. Sum `monto` to net out undos (`reverso` rows are negative).
+
+Terraform creates the BigQuery external table `botjonh.ledger` over those files
+(`terraform output bigquery_ledger_table`). To build the dashboard:
+
+1. Open [lookerstudio.google.com](https://lookerstudio.google.com) → **Create** →
+   **Data source** → **BigQuery** → project `jd-botjonh` → dataset `botjonh` →
+   table `ledger` → **Connect**.
+2. Add a calculated field `bucket` for the 50/30/20 rule:
+
+   ```
+   CASE
+     WHEN categoria IN ("vivienda","servicios","supermercado","transporte","salud","deudas") THEN "necesidades"
+     WHEN categoria IN ("ahorro","inversion") THEN "ahorro"
+     ELSE "ocio"
+   END
+   ```
+
+3. Suggested charts (filter `tipo_mov = gasto` unless noted): monthly spend
+   trend (time series, `fecha` by month, SUM `monto`); spend by `categoria`
+   (bar); 50/30/20 split by `bucket` (pie) next to income (`tipo_mov = ingreso`).
+
 ## Configuration
 
 All secrets come from Secret Manager; settings from environment variables.
@@ -117,11 +154,10 @@ All secrets come from Secret Manager; settings from environment variables.
 | `WEBHOOK_SECRET_TOKEN` | Secret `assistant-webhook-secret` (X-Telegram-Bot-Api-Secret-Token) |
 | `WEBHOOK_PATH` | Secret `assistant-webhook-path` (webhook route) |
 | `DEEPSEEK_API_KEY` | Secret `assistant-deepseek-key` |
-| `SPREADSHEET_ID` | Finance ledger (Gastos, Ingresos) |
 | `CALENDAR_ID` | Dedicated calendar |
 | `MLFLOW_TRACKING_URI` | Shared MLflow server |
 | `LLM_MODEL` | Default `deepseek-flash` |
-| `BACKUP_BUCKET` | Weekly JSON backup (from `terraform output`) |
+| `BACKUP_BUCKET` | Weekly JSON backup and daily ledger CSV (from `terraform output`) |
 | `MAX_MSGS_PER_MINUTE` | Per-chat rate limit (default 10) |
 | `MAX_LLM_USD_PER_DAY` | Daily LLM spend cap per chat, default 0.10 (fails closed) |
 

@@ -138,14 +138,14 @@ class ListarUsuarios(_Args):
 
 # name -> (args model, "module:function"). Order is the order sent to the LLM.
 TOOLS: dict[str, tuple[type[_Args], str]] = {
-    "registrar_gasto": (RegistrarGasto, "assistant.services.sheets:registrar_gasto"),
+    "registrar_gasto": (RegistrarGasto, "assistant.services.ledger:registrar_gasto"),
     "registrar_ingreso": (
         RegistrarIngreso,
-        "assistant.services.sheets:registrar_ingreso",
+        "assistant.services.ledger:registrar_ingreso",
     ),
     "resumen_finanzas": (
         ResumenFinanzas,
-        "assistant.services.sheets:resumen_finanzas",
+        "assistant.services.ledger:resumen_finanzas",
     ),
     "recomendar_presupuesto": (
         RecomendarPresupuesto,
@@ -158,7 +158,7 @@ TOOLS: dict[str, tuple[type[_Args], str]] = {
         "assistant.services.calendar:cancelar_evento",
     ),
     "recordatorio": (Recordatorio, "assistant.services.calendar:recordatorio"),
-    "deshacer": (Deshacer, "assistant.services.sheets:deshacer"),
+    "deshacer": (Deshacer, "assistant.services.ledger:deshacer"),
     "invitar_beta": (InvitarBeta, "assistant.services.state:invitar_beta"),
     "listar_usuarios": (ListarUsuarios, "assistant.services.state:listar_usuarios"),
 }

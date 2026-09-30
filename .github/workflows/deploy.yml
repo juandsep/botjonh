@@ -109,7 +109,6 @@ jobs:
             GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
             BACKUP_BUCKET=${{ vars.BACKUP_BUCKET }}
             MLFLOW_TRACKING_URI=${{ vars.MLFLOW_TRACKING_URI }}
-            SPREADSHEET_ID=${{ vars.SPREADSHEET_ID }}
             CALENDAR_ID=${{ vars.CALENDAR_ID }}
           secrets: |
             TELEGRAM_BOT_TOKEN=assistant-bot-token:latest

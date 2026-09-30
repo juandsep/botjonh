@@ -34,10 +34,11 @@ def invitar_beta(ctx, nombre: str) -> str            # owner only, checked in co
 def listar_usuarios(ctx) -> str                      # owner only
 ```
 
-## services/sheets.py, budgets.py, calendar.py
+## services/ledger.py, budgets.py, calendar.py
 
 ```python
-# sheets: append-only ledger, Decimal amounts, idempotent by (update_id, item index)
+# ledger: Firestore ledger/{chat_id}/movimientos, append-only, Decimal amounts as
+# strings, idempotent by doc id ({update_id}-{i}, {update_id}-i0, {batch_id}-r{i})
 def registrar_gasto(ctx, items: list[dict], moneda: str, fecha: date) -> str
 def registrar_ingreso(ctx, monto: Decimal, moneda: str, fuente: str, fecha: date,
                       nota: str | None = None) -> str
@@ -45,6 +46,7 @@ def resumen_finanzas(ctx, periodo: str) -> str       # hoy|semana|mes
 def deshacer(ctx, batch_id: str | None = None) -> str   # appends reverso rows
 def gastos_por_categoria(chat_id: str, desde: date, hasta: date) -> dict[str, Decimal]
 def total_ingresos(chat_id: str, desde: date, hasta: date) -> Decimal
+def movimientos(chat_id: str, campo: str, desde, hasta) -> list[dict]  # desde <= campo < hasta
 # budgets: pure rules, no LLM
 def recomendar_presupuesto(ctx, periodo: str = "mes") -> str
 # calendar: dedicated CALENDAR_ID, user's zone
@@ -58,7 +60,8 @@ def recordatorio(ctx, texto: str, cuando: datetime) -> str
 ## jobs/__init__.py
 
 ```python
-def run_job(name: str) -> None   # digest|checkin|weekly; weekly also backs up to GCS
+def run_job(name: str) -> None   # digest|checkin|weekly; digest exports yesterday's
+                                 # ledger CSV, weekly backs up JSON to GCS
 ```
 
 ## llm/client.py, llm/tools.py

@@ -72,6 +72,7 @@ data "google_project" "this" {}
 resource "google_project_service" "apis" {
   for_each = toset([
     "artifactregistry.googleapis.com",
+    "bigquery.googleapis.com",
     "cloudbuild.googleapis.com",
     "cloudresourcemanager.googleapis.com",
     "cloudscheduler.googleapis.com",
@@ -79,7 +80,6 @@ resource "google_project_service" "apis" {
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
     "pubsub.googleapis.com",
-    "sheets.googleapis.com",
     "calendar-json.googleapis.com",
     "run.googleapis.com",
     "secretmanager.googleapis.com",
@@ -217,8 +217,9 @@ resource "google_secret_manager_secret_iam_member" "webhook_reads_secrets" {
   member    = google_service_account.sa["webhook"].member
 }
 
-# Weekly backup of Firestore and the ledger as JSON. The worker only creates
-# objects; versioning plus a 90-day lifecycle keep old copies bounded.
+# Weekly JSON backup of Firestore under backup/ (90-day lifecycle) and the daily
+# ledger CSV export under ledger/ (kept: BigQuery reads it). The worker only
+# creates objects, so it can never overwrite or delete either.
 resource "google_storage_bucket" "backup" {
   name                        = "${var.project_id}-backup"
   location                    = var.region
@@ -231,7 +232,8 @@ resource "google_storage_bucket" "backup" {
   }
   lifecycle_rule {
     condition {
-      age = 90
+      age            = 90
+      matches_prefix = ["backup/"]
     }
     action {
       type = "Delete"
@@ -243,6 +245,52 @@ resource "google_storage_bucket_iam_member" "worker_writes_backup" {
   bucket = google_storage_bucket.backup.name
   role   = "roles/storage.objectCreator"
   member = google_service_account.sa["worker"].member
+}
+
+# BigQuery over the ledger CSVs for Looker Studio: an external table costs no
+# storage and queries of a few KB fall in the free tier.
+resource "google_bigquery_dataset" "botjonh" {
+  dataset_id                 = "botjonh"
+  location                   = "US"
+  delete_contents_on_destroy = false
+  depends_on                 = [google_project_service.apis]
+}
+
+resource "google_bigquery_table" "ledger" {
+  dataset_id          = google_bigquery_dataset.botjonh.dataset_id
+  table_id            = "ledger"
+  deletion_protection = false
+
+  external_data_configuration {
+    autodetect    = false
+    source_format = "CSV"
+    source_uris   = ["gs://${google_storage_bucket.backup.name}/ledger/*"]
+
+    csv_options {
+      quote                 = "\""
+      skip_leading_rows     = 1
+      allow_quoted_newlines = true
+    }
+
+    # Adds the partition column mes (YYYY-MM) from ledger/mes=YYYY-MM/.
+    hive_partitioning_options {
+      mode                     = "AUTO"
+      source_uri_prefix        = "gs://${google_storage_bucket.backup.name}/ledger/"
+      require_partition_filter = false
+    }
+
+    schema = jsonencode([
+      { name = "fecha", type = "DATE" },
+      { name = "chat_id", type = "STRING" },
+      { name = "tipo_mov", type = "STRING" },
+      { name = "categoria", type = "STRING" },
+      { name = "monto", type = "NUMERIC" },
+      { name = "moneda", type = "STRING" },
+      { name = "nota", type = "STRING" },
+      { name = "batch_id", type = "STRING" },
+      { name = "tipo", type = "STRING" },
+    ])
+  }
 }
 
 # Pub/Sub signs push requests with the worker account's OIDC token, so that
@@ -389,6 +437,11 @@ output "github_variables" {
     GCP_WORKER_SA     = google_service_account.sa["worker"].email
     BACKUP_BUCKET     = google_storage_bucket.backup.name
   }
+}
+
+# Looker Studio data source: BigQuery -> this table.
+output "bigquery_ledger_table" {
+  value = "${var.project_id}.${google_bigquery_dataset.botjonh.dataset_id}.${google_bigquery_table.ledger.table_id}"
 }
 
 # Hand these to portfolio-infra so it can grant MLflow access.
