@@ -1,4 +1,4 @@
-# botjonh
+# telegram-personal-assistant
 
 A single-user Telegram bot that is a finance advisor and a calendar: it logs
 expenses and income to a Firestore ledger, recommends budgets to save, keeps its
@@ -21,7 +21,7 @@ testers, on GCP for about $1–2/month (LLM tokens only).
 
 ## Architecture
 
-![botjonh on GCP](docs/architecture/architecture.png)
+![telegram-personal-assistant on GCP](docs/architecture/architecture.png)
 
 One expense message (`café 2000cop`), handled without the LLM:
 

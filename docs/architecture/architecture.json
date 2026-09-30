@@ -2,53 +2,15 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "botjonh on GCP",
+    "title": "telegram-personal-assistant",
     "output": "architecture.html",
-    "quality_profile": "showcase",
-    "views": [
-      {
-        "id": "message-path",
-        "label": "Message path",
-        "focus": [
-          "telegram",
-          "api",
-          "updates",
-          "worker",
-          "firestore"
-        ],
-        "note": "A Telegram update is acknowledged fast, queued, then handled by the worker."
-      },
-      {
-        "id": "money",
-        "label": "Money in USD",
-        "focus": [
-          "worker",
-          "fx",
-          "firestore",
-          "gcs",
-          "bigquery"
-        ],
-        "note": "Amounts convert to USD in code, land in Firestore and flow daily to BigQuery."
-      },
-      {
-        "id": "time",
-        "label": "Agenda and reminders",
-        "focus": [
-          "scheduler",
-          "worker",
-          "tasks",
-          "kms"
-        ],
-        "note": "Scheduled jobs and exact reminders reach the same private worker."
-      }
-    ]
+    "quality_profile": "showcase"
   },
   "components": [
     {
       "id": "telegram",
       "type": "external",
       "label": "Telegram",
-      "sublabel": "Bot API",
       "pos": [
         20,
         300
@@ -62,7 +24,7 @@
       "id": "api",
       "type": "backend",
       "label": "assistant-api",
-      "sublabel": "Cloud Run, public",
+      "sublabel": "public",
       "pos": [
         210,
         300
@@ -70,14 +32,12 @@
       "size": [
         150,
         64
-      ],
-      "tag": "secret route + header"
+      ]
     },
     {
       "id": "updates",
       "type": "messagebus",
       "label": "Pub/Sub",
-      "sublabel": "assistant-updates",
       "pos": [
         430,
         300
@@ -91,7 +51,7 @@
       "id": "worker",
       "type": "backend",
       "label": "assistant-worker",
-      "sublabel": "Cloud Run, private",
+      "sublabel": "private",
       "pos": [
         650,
         300
@@ -99,14 +59,13 @@
       "size": [
         160,
         64
-      ],
-      "tag": "quick parser + tools"
+      ]
     },
     {
       "id": "firestore",
       "type": "database",
       "label": "Firestore",
-      "sublabel": "users, ledger, agenda",
+      "sublabel": "state + ledger",
       "pos": [
         890,
         300
@@ -120,7 +79,7 @@
       "id": "deepseek",
       "type": "external",
       "label": "DeepSeek",
-      "sublabel": "tool calling",
+      "sublabel": "LLM",
       "pos": [
         650,
         110
@@ -148,7 +107,6 @@
       "id": "kms",
       "type": "security",
       "label": "Cloud KMS",
-      "sublabel": "iCal URL key",
       "pos": [
         430,
         110
@@ -162,7 +120,6 @@
       "id": "scheduler",
       "type": "cloud",
       "label": "Cloud Scheduler",
-      "sublabel": "assistant-cron",
       "pos": [
         430,
         500
@@ -176,7 +133,7 @@
       "id": "tasks",
       "type": "messagebus",
       "label": "Cloud Tasks",
-      "sublabel": "assistant-reminders",
+      "sublabel": "reminders",
       "pos": [
         650,
         500
@@ -190,7 +147,7 @@
       "id": "gcs",
       "type": "database",
       "label": "GCS",
-      "sublabel": "daily CSV export",
+      "sublabel": "CSV",
       "pos": [
         890,
         500
@@ -204,7 +161,6 @@
       "id": "bigquery",
       "type": "database",
       "label": "BigQuery",
-      "sublabel": "external table",
       "pos": [
         1120,
         500
@@ -212,14 +168,13 @@
       "size": [
         150,
         64
-      ],
-      "tag": "Looker Studio"
+      ]
     }
   ],
   "boundaries": [
     {
       "kind": "region",
-      "label": "GCP project jd-botjonh (us-central1)",
+      "label": "GCP jd-botjonh",
       "wraps": [
         "api",
         "updates",
@@ -252,21 +207,21 @@
       "id": "push",
       "from": "updates",
       "to": "worker",
-      "label": "OIDC push",
+      "label": "push",
       "variant": "emphasis"
     },
     {
       "id": "state",
       "from": "worker",
       "to": "firestore",
-      "label": "USD rows",
+      "label": "write",
       "variant": "emphasis"
     },
     {
       "id": "llm",
       "from": "worker",
       "to": "deepseek",
-      "label": "fallback turn",
+      "label": "fallback",
       "variant": "dashed",
       "labelDy": -50
     },
@@ -274,7 +229,7 @@
       "id": "rates",
       "from": "firestore",
       "to": "fx",
-      "label": "rate cache miss",
+      "label": "rates",
       "variant": "dashed"
     },
     {
@@ -303,42 +258,13 @@
       "id": "export",
       "from": "firestore",
       "to": "gcs",
-      "label": "digest export",
+      "label": "daily export",
       "labelDy": 88
     },
     {
       "id": "external-table",
       "from": "gcs",
       "to": "bigquery"
-    }
-  ],
-  "cards": [
-    {
-      "dot": "cyan",
-      "title": "Fast path",
-      "items": [
-        "api acks Telegram in under 300 ms",
-        "Quick entries skip the LLM entirely",
-        "Replies go straight to the Bot API"
-      ]
-    },
-    {
-      "dot": "emerald",
-      "title": "Money",
-      "items": [
-        "Code converts to USD, never the LLM",
-        "Append-only edits: reverso + new row",
-        "BigQuery reads CSV, no streaming"
-      ]
-    },
-    {
-      "dot": "rose",
-      "title": "Safety",
-      "items": [
-        "Allowlist before any token is spent",
-        "iCal URL stored only as KMS ciphertext",
-        "Only LLM outages return 5xx"
-      ]
     }
   ]
 }

@@ -34,7 +34,7 @@ variable "firestore_location" {
 variable "github_repo" {
   description = "owner/name of the repository allowed to deploy."
   type        = string
-  default     = "juandsep/botjonh"
+  default     = "juandsep/telegram-personal-assistant"
 }
 
 variable "billing_account" {

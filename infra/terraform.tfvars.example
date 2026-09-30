@@ -1,6 +1,6 @@
 # Copy to terraform.tfvars and fill in. Never commit terraform.tfvars.
 project_id          = "jd-botjonh"   # globally unique; create the project first
-github_repo         = "juandsep/botjonh"
+github_repo         = "juandsep/telegram-personal-assistant"
 billing_account     = "XXXXXX-XXXXXX-XXXXXX"
 monthly_budget_usd  = 3
 timezone            = "America/Panama"
