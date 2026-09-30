@@ -167,3 +167,16 @@ def test_ics_feed(ics_db, caplog) -> None:
     assert agenda._items.call_args.args[0] == "42"
     ours = [r.getMessage() for r in caplog.records if r.name.startswith("assistant")]
     assert ours == ["ics status=200"]  # the token never reaches our logs
+
+
+def test_caption_only_gif_from_known_chat_published(fake) -> None:
+    body = {
+        "update_id": 5,
+        "message": {
+            "chat": {"id": 42},
+            "caption": "gasto",
+            "animation": {"file_id": "g"},
+        },
+    }
+    assert client.post(URL, json=body, headers=HEADERS).status_code == 200
+    fake.publish.assert_called_once_with("assistant-updates", body)

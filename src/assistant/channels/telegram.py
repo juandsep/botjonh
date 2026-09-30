@@ -14,7 +14,7 @@ API_BASE = "https://api.telegram.org"
 
 
 def parse_update(update: object) -> InboundMessage | None:
-    """A ``message`` or ``callback_query`` update; None for anything else."""
+    """A ``message`` (text or GIF) or ``callback_query``; None for anything else."""
     if not isinstance(update, dict):
         return None
     try:
@@ -28,13 +28,17 @@ def parse_update(update: object) -> InboundMessage | None:
                 callback_query_id=str(cq["id"]),
             )
         msg = update["message"]
+        replied = (msg.get("reply_to_message") or {}).get("animation") or {}
         return InboundMessage(
             chat_id=str(msg["chat"]["id"]),
             text=str(msg.get("text", "")),
             update_id=int(update["update_id"]),
             message_id=msg.get("message_id"),
+            animation_file_id=(msg.get("animation") or {}).get("file_id"),
+            caption=str(msg.get("caption", "")),
+            reply_animation_file_id=replied.get("file_id"),
         )
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError, AttributeError):
         return None
 
 
@@ -73,3 +77,6 @@ class Telegram(Channel):
 
     def delete_message(self, chat_id: str, message_id: int) -> None:
         self._post("deleteMessage", chat_id=chat_id, message_id=message_id)
+
+    def send_animation(self, chat_id: str, file_id: str) -> None:
+        self._post("sendAnimation", chat_id=chat_id, animation=file_id)

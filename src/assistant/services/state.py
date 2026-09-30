@@ -13,6 +13,8 @@ Collections (Firestore native):
   no nested arrays).
 - ``ics_tokens/{token}``: chat_id of a private ICS feed; ``users.ics_token``
   points back so the link can be shown again or rotated. Never log tokens.
+- ``gifs/{chat_id}``: arrays ``gasto``/``ingreso`` of Telegram file_ids (max 20
+  each) sent as a reaction after a registration. Never log file_ids.
 
 Set a Firestore TTL policy on ``expire_at`` for processed, invites, rate, spend
 and pending. Doc ids contain chat_ids: never log them.
@@ -37,6 +39,7 @@ PENDING_TTL = timedelta(minutes=10)
 INVITE_TTL = timedelta(hours=24)
 PROCESSED_TTL = timedelta(days=7)
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{22}")  # secrets.token_urlsafe(16)
+GIF_MAX = 20
 _ICS_TOKEN = re.compile(r"[A-Za-z0-9_-]{32}")  # secrets.token_urlsafe(24)
 
 
@@ -244,6 +247,25 @@ def chat_for_ics_token(token: str) -> str | None:
     if not _ICS_TOKEN.fullmatch(token):
         return None
     return (_data(_doc("ics_tokens", token).get()) or {}).get("chat_id")
+
+
+# --- reaction GIFs ----------------------------------------------------------------
+
+
+def gifs(chat_id: str) -> dict[str, list[str]]:
+    data = _data(_doc("gifs", chat_id).get()) or {}
+    return {t: list(data.get(t, [])) for t in ("gasto", "ingreso")}
+
+
+def add_gif(chat_id: str, tipo: str, file_id: str) -> None:
+    """Newest last; a repeated file_id moves to the end; keeps the last 20."""
+    ids = [f for f in gifs(chat_id)[tipo] if f != file_id] + [file_id]
+    _doc("gifs", chat_id).set({tipo: ids[-GIF_MAX:]}, merge=True)
+
+
+def random_gif(chat_id: str, tipo: str) -> str | None:
+    ids = gifs(chat_id).get(tipo) or []
+    return secrets.choice(ids) if ids else None
 
 
 # --- owner tools -----------------------------------------------------------------
