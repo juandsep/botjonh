@@ -300,7 +300,7 @@ def test_conectar(monkeypatch, st, llm, tg) -> None:
     client.post("/push", json=envelope(message("/conectar https://x/a.ics")))
     assert sent_texts(tg) == [
         "Aún no disponible.",
-        "Uso: /conectar <url del calendario .ics>",
+        worker.CONECTAR_HINT,
         "✓ calendario conectado",
     ]
     assert conectar.call_args.args[1] == "https://x/a.ics"
@@ -522,3 +522,26 @@ def test_reminder_telegram_error_is_not_5xx(monkeypatch, tg, caplog) -> None:
     body = {"chat_id": "42", "evento_id": "100"}
     assert client.post("/tasks/reminder", json=body).status_code == 204
     assert "reminder_send_failed" in caplog.text and "X 09:00" not in caplog.text
+
+
+def test_bare_ical_url_connects_and_is_deleted(monkeypatch, st, llm, tg) -> None:
+    conectar = MagicMock(return_value="✓ Conectado.")
+    busy = types.SimpleNamespace(conectar=conectar, validar=lambda raw: raw)
+    monkeypatch.setitem(sys.modules, "assistant.services.busy", busy)
+    url = "https://calendar.google.com/calendar/ical/x/private-y/basic.ics"
+    update = message(url)
+    update["message"]["message_id"] = 5
+    client.post("/push", json=envelope(update))
+    assert conectar.call_args.args[1] == url
+    assert any(c.request.url.path.endswith("deleteMessage") for c in tg.calls)
+    llm.run_turn.assert_not_called()
+
+
+def test_other_links_are_not_treated_as_calendars(monkeypatch, st, llm, tg) -> None:
+    def validar(raw: str) -> str:
+        raise ValueError("invalid_url")
+
+    busy = types.SimpleNamespace(conectar=MagicMock(), validar=validar)
+    monkeypatch.setitem(sys.modules, "assistant.services.busy", busy)
+    client.post("/push", json=envelope(message("https://example.com/x")))
+    busy.conectar.assert_not_called()

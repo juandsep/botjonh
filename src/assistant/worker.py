@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import dataclasses
 import importlib
 import json
 import logging
@@ -45,6 +46,10 @@ GIF_USAGE = (
 )
 EDIT_USAGE = "Uso: /editar <n> <monto>[moneda], ej. /editar 1 3usd"
 ANULAR_USAGE = "Uso: /anular <n>, ej. /anular 1"
+CONECTAR_HINT = (
+    "Envíame el enlace iCal secreto de tu calendario. Google: Configuración → "
+    "tu calendario → Integrar el calendario → Dirección secreta en formato iCal."
+)
 LEDGER_COMMANDS = ("/ultimos", "/editar", "/anular", "/gif")
 REGISTROS = {"registrar_gasto": "gasto", "registrar_ingreso": "ingreso"}
 
@@ -133,6 +138,8 @@ def handle_update(msg: InboundMessage, settings: WorkerSettings) -> int:
     if not msg.text.strip():
         _send(channel, msg, TEXT_ONLY)
         return ACK
+    if _is_ical_url(msg.text):  # the link sent on its own, after /conectar
+        msg = dataclasses.replace(msg, text=f"/conectar {msg.text.strip()}")
     if msg.text.startswith(("/calendario", "/conectar")):
         reply = _command(ctx, msg, settings)
         if msg.text.startswith("/conectar ") and msg.message_id is not None:
@@ -191,6 +198,18 @@ def handle_update(msg: InboundMessage, settings: WorkerSettings) -> int:
     return ACK
 
 
+def _is_ical_url(text: str) -> bool:
+    """A lone https/webcal link to an allowlisted calendar host."""
+    text = text.strip()
+    if " " in text or not text.lower().startswith(("https://", "webcal://")):
+        return False
+    try:
+        importlib.import_module("assistant.services.busy").validar(text)
+    except Exception:
+        return False
+    return True
+
+
 def _command(ctx: ToolContext, msg: InboundMessage, settings: WorkerSettings) -> str:
     """/calendario [enlace|nuevo] and /conectar <url>, without the LLM."""
     cmd, _, arg = msg.text.strip().partition(" ")
@@ -198,7 +217,7 @@ def _command(ctx: ToolContext, msg: InboundMessage, settings: WorkerSettings) ->
     try:
         if cmd == "/conectar":
             if not arg:
-                return "Uso: /conectar <url del calendario .ics>"
+                return CONECTAR_HINT
             try:
                 busy = importlib.import_module("assistant.services.busy")
             except ImportError:
