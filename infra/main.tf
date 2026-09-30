@@ -262,7 +262,7 @@ resource "google_bigquery_dataset" "botjonh" {
 resource "google_storage_bucket_object" "ledger_seed" {
   bucket       = google_storage_bucket.backup.name
   name         = "ledger/mes=2026-09/_header.csv"
-  content      = "fecha,chat_id,tipo_mov,categoria,monto,moneda,nota,batch_id,tipo\n"
+  content      = "fecha,chat_id,tipo_mov,categoria,monto,moneda,nota,batch_id,tipo,monto_original,moneda_original,tasa\n"
   content_type = "text/csv"
 }
 
@@ -282,6 +282,8 @@ resource "google_bigquery_table" "ledger" {
       quote                 = "\""
       skip_leading_rows     = 1
       allow_quoted_newlines = true
+      # Exports before the USD ledger have no monto_original/moneda_original/tasa.
+      allow_jagged_rows = true
     }
 
     # Adds the partition column mes (YYYY-MM) from ledger/mes=YYYY-MM/.
@@ -301,6 +303,9 @@ resource "google_bigquery_table" "ledger" {
       { name = "nota", type = "STRING" },
       { name = "batch_id", type = "STRING" },
       { name = "tipo", type = "STRING" },
+      { name = "monto_original", type = "NUMERIC" },
+      { name = "moneda_original", type = "STRING" },
+      { name = "tasa", type = "NUMERIC" },
     ])
   }
 }

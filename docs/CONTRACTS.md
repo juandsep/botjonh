@@ -36,19 +36,50 @@ def invitar_beta(ctx, nombre: str) -> str            # owner only, checked in co
 def listar_usuarios(ctx) -> str                      # owner only
 ```
 
-## services/ledger.py, budgets.py, agenda.py, busy.py
+## services/ledger.py, fx.py, budgets.py, agenda.py, busy.py
 
 ```python
-# ledger: Firestore ledger/{chat_id}/movimientos, append-only, Decimal amounts as
-# strings, idempotent by doc id ({update_id}-{i}, {update_id}-i0, {batch_id}-r{i})
+# ledger: Firestore ledger/{chat_id}/movimientos, append-only (never edits or
+# deletes), Decimal amounts as strings, idempotent by doc id ({update_id}-{i},
+# {update_id}-i0, deshacer {batch_id}-r{i}, editar/anular {registro_id}-x and
+# {update_id}-e0). Every amount is USD: monto (USD), moneda="USD",
+# monto_original, moneda_original, tasa (moneda_original per 1 USD), fuente_tasa
+# (usd|trm|ecb); a reverso has reversa=<registro doc id>. Users write any
+# currency; code converts with fx.a_usd at the movement's date. On FxError
+# nothing is written and the reply is "No pude obtener la tasa de <CUR>, intenta
+# luego." or "Moneda no soportada."; monto <= 0 -> "El monto debe ser mayor que 0."
+# Replies are one line: "−0.49 USD · café (2,000 COP)", "+1000.00 USD · nota"
+# (label = nota, else categoria/fuente; items joined with "; "). A blank gasto
+# categoria is stored as "otros".
 def registrar_gasto(ctx, items: list[dict], moneda: str, fecha: date) -> str
 def registrar_ingreso(ctx, monto: Decimal, moneda: str, fuente: str, fecha: date,
                       nota: str | None = None) -> str
-def resumen_finanzas(ctx, periodo: str) -> str       # hoy|semana|mes
+def resumen_finanzas(ctx, periodo: str) -> str       # hoy|semana|mes, in USD
 def deshacer(ctx, batch_id: str | None = None) -> str   # appends reverso rows
 def gastos_por_categoria(chat_id: str, desde: date, hasta: date) -> dict[str, Decimal]
 def total_ingresos(chat_id: str, desde: date, hasta: date) -> Decimal
 def movimientos(chat_id: str, campo: str, desde, hasta) -> list[dict]  # desde <= campo < hasta
+# Editing: the last registros not cancelled by a reverso, newest (creado) first.
+# ultimos item keys: indice (1..n), id, fecha, tipo_mov, monto (USD),
+# monto_original, moneda_original, categoria (gasto) | fuente (ingreso), nota.
+def ultimos(ctx, n: int = 5) -> list[dict]
+def ultimos_texto(ctx, n: int = 5) -> str            # "1) 30/09 −0.49 USD café (2,000 COP)"
+                                                     # one per line; "Sin movimientos."
+# editar: reverso of movement <indice> + new registro (batch e{update_id}) with
+# the merged fields; monto/moneda re-converted at the original fecha. A retry of
+# the same update answers the same and writes nothing.
+def editar(ctx, indice: int = 1, monto: Decimal | None = None, moneda: str | None = None,
+           categoria: str | None = None, nota: str | None = None) -> str
+                                                     # "✓ editado: −1.00 USD · café"
+def anular(ctx, indice: int = 1) -> str              # reverso only: "✓ anulado: ..."
+# Bad indice -> "No encontré ese movimiento."
+# fx: rates to USD in code, never the LLM. COP = official TRM (datos.gov.co
+# 32sa-8pi3, latest row with vigenciadesde <= fecha, "trm"); ECB currencies via
+# Frankfurter (base=USD, "ecb"); USD -> rate 1, "usd", no HTTP. httpx 5 s, no
+# redirects. Cached in Firestore fx/{YYYY-MM-DD}_{CUR} = {tasa, fuente}.
+class FxError(Exception): ...                        # str(e): unsupported|http|data|cache
+def a_usd(monto: Decimal, moneda: str, fecha: date) -> tuple[Decimal, Decimal, str]
+                                                     # (usd 0.01, moneda per USD, source)
 # budgets: pure rules, no LLM
 def recomendar_presupuesto(ctx, periodo: str = "mes") -> str
 # agenda: Firestore agenda/{chat_id}/eventos/{evento_id}, user's zone.
@@ -86,6 +117,9 @@ with Confirmar/Cancelar; `execute_pending` runs it without checking again.
 ```python
 def run_job(name: str) -> None   # digest|checkin|weekly; digest exports yesterday's
                                  # ledger CSV, weekly backs up JSON to GCS
+# CSV (BigQuery botjonh.ledger): fecha,chat_id,tipo_mov,categoria,monto,moneda,
+# nota,batch_id,tipo,monto_original,moneda_original,tasa (monto in USD; older
+# files lack the last three columns, read as NULL via allow_jagged_rows).
 ```
 
 ## llm/client.py, llm/tools.py

@@ -1,18 +1,24 @@
-"""Finance ledger on Firestore: append-only, Decimal amounts stored as strings.
+"""Finance ledger on Firestore: append-only, every amount in USD.
 
 Layout: ``ledger/{chat_id}/movimientos/{doc_id}`` with the fields ``fecha``
-(ISO date), ``monto`` (str, quantized to 0.01), ``moneda``, ``categoria`` (gasto)
-or ``fuente`` (ingreso), ``tipo_mov`` (gasto|ingreso), ``nota``, ``batch_id``,
-``update_id``, ``tipo`` (registro|reverso) and ``creado`` (server timestamp).
+(ISO date), ``monto`` (USD str, quantized to 0.01), ``moneda`` ("USD"),
+``monto_original``, ``moneda_original``, ``tasa`` (moneda_original per 1 USD) and
+``fuente_tasa`` (usd|trm|ecb) from ``services.fx``, ``categoria`` (gasto) or
+``fuente`` (ingreso), ``tipo_mov`` (gasto|ingreso), ``nota``, ``batch_id``,
+``update_id``, ``tipo`` (registro|reverso), ``reversa`` (reverso: the registro
+doc id it cancels) and ``creado`` (server timestamp). Rows written before the
+USD ledger lack the ``*_original``/``tasa`` fields.
 
-Doc ids: gasto ``{update_id}-{i}``, ingreso ``{update_id}-i0``, reverso
-``{batch_id}-r{i}``. Every call creates its docs with ``create()`` in one atomic
-batch, so a Pub/Sub retry of the same update hits AlreadyExists and writes
-nothing. Undo appends negative ``reverso`` docs and never edits or deletes.
+Doc ids: gasto ``{update_id}-{i}``, ingreso ``{update_id}-i0``, deshacer reverso
+``{batch_id}-r{i}``, editar/anular reverso ``{registro_id}-x`` and editar's new
+registro ``{update_id}-e0`` (batch ``e{update_id}``). Every call creates its
+docs with ``create()`` in one atomic batch, so a Pub/Sub retry of the same
+update hits AlreadyExists and writes nothing. Nothing is ever edited or deleted.
 
-Reads query one chat's subcollection by a single field (``fecha``, ``creado``
-or ``batch_id``): automatic single-field indexes, no composite index. Sums run
-in Python with Decimal. Doc paths contain chat_ids: never log them.
+Reads query one chat's subcollection by a single field (``fecha``, ``creado``,
+``batch_id`` or ``update_id``): automatic single-field indexes, no composite
+index. Sums run in Python with Decimal. Doc paths contain chat_ids: never log
+them.
 """
 
 from __future__ import annotations
@@ -35,6 +41,8 @@ from assistant.context import ToolContext
 log = logging.getLogger(__name__)
 
 CENT = Decimal("0.01")
+POSITIVO = "El monto debe ser mayor que 0."
+NO_ENCONTRADO = "No encontré ese movimiento."
 
 
 @cache
@@ -103,6 +111,47 @@ def _por_fecha(chat_id: str, tipo_mov: str, desde: date, hasta: date) -> list[di
     return [d for d in docs if d["tipo_mov"] == tipo_mov]
 
 
+def _fx(monto: object, moneda: str, fecha: date) -> dict | str:
+    """USD fields for one amount, or the reply when the rate is unavailable."""
+    original = q(monto)
+    if original <= 0:
+        return POSITIVO
+    cur = moneda.strip().upper()
+    fx = importlib.import_module("assistant.services.fx")
+    try:
+        usd, tasa, fuente = fx.a_usd(original, cur, fecha)
+    except fx.FxError as e:
+        if str(e) == "unsupported":
+            return "Moneda no soportada."
+        return f"No pude obtener la tasa de {cur}, intenta luego."
+    return {
+        "monto": str(usd),
+        "moneda": "USD",
+        "monto_original": str(original),
+        "moneda_original": cur,
+        "tasa": str(tasa),
+        "fuente_tasa": fuente,
+    }
+
+
+def _cifra(valor: Decimal) -> str:
+    """2000 -> "2,000"; 12.5 -> "12.50"."""
+    valor = abs(valor)
+    return f"{valor:,.0f}" if valor == valor.to_integral() else f"{valor:,.2f}"
+
+
+def _texto(d: dict, sep: str = " · ") -> str:
+    """One movement as "−0.49 USD · café (2,000 COP)"; a reverso as its registro."""
+    signo = "−" if d["tipo_mov"] == "gasto" else "+"
+    texto = f"{signo}{abs(q(d['monto']))} USD"
+    etiqueta = d.get("nota") or d.get("categoria") or d.get("fuente")
+    if etiqueta:
+        texto += f"{sep}{etiqueta}"
+    if d.get("moneda_original", "USD") != "USD":
+        texto += f" ({_cifra(Decimal(d['monto_original']))} {d['moneda_original']})"
+    return texto
+
+
 # ponytail: batch_id = update_id, so one registrar_gasto call per turn (the prompt
 # batches items); a second call in the same turn is treated as a retry.
 def registrar_gasto(
@@ -111,14 +160,13 @@ def registrar_gasto(
     batch = f"g{ctx.update_id}"
     docs = {}
     for i, item in enumerate(items):
-        monto = q(item["monto"])
-        if monto <= 0:
-            raise ValueError("monto")
+        usd = _fx(item["monto"], moneda, fecha)
+        if isinstance(usd, str):
+            return usd
         docs[f"{ctx.update_id}-{i}"] = {
             "fecha": fecha.isoformat(),
-            "monto": str(monto),
-            "moneda": moneda,
-            "categoria": str(item["categoria"]),
+            **usd,
+            "categoria": str(item.get("categoria") or "").strip() or "otros",
             "tipo_mov": "gasto",
             "nota": str(item.get("nota") or ""),
             "batch_id": batch,
@@ -127,9 +175,7 @@ def registrar_gasto(
         }
     _crear(ctx.chat_id, docs)
     _state().set_last_batch(ctx.chat_id, batch)
-    return "; ".join(
-        f"✓ {d['monto']} {moneda} → {d['categoria']}" for d in docs.values()
-    )
+    return "; ".join(_texto(d) for d in docs.values())
 
 
 def registrar_ingreso(
@@ -140,15 +186,14 @@ def registrar_ingreso(
     fecha: date,
     nota: str | None = None,
 ) -> str:
-    valor = q(monto)
-    if valor <= 0:
-        raise ValueError("monto")
+    usd = _fx(monto, moneda, fecha)
+    if isinstance(usd, str):
+        return usd
     batch = f"i{ctx.update_id}"
     doc = {
         "fecha": fecha.isoformat(),
-        "monto": str(valor),
-        "moneda": moneda,
-        "fuente": fuente,
+        **usd,
+        "fuente": fuente or "",
         "tipo_mov": "ingreso",
         "nota": nota or "",
         "batch_id": batch,
@@ -157,7 +202,15 @@ def registrar_ingreso(
     }
     _crear(ctx.chat_id, {f"{ctx.update_id}-i0": doc})
     _state().set_last_batch(ctx.chat_id, batch)
-    return f"✓ +{valor} {moneda} ← {fuente}"
+    return _texto(doc)
+
+
+def _reverso(ctx: ToolContext, doc_id: str, d: dict) -> dict:
+    """Negative copy of a registro; ``reversa`` names the registro it cancels."""
+    rev = {**d, "monto": str(-q(d["monto"])), "update_id": ctx.update_id}
+    if "monto_original" in d:
+        rev["monto_original"] = str(-q(d["monto_original"]))
+    return {**rev, "tipo": "reverso", "reversa": doc_id}
 
 
 def deshacer(ctx: ToolContext, batch_id: str | None = None) -> str:
@@ -165,30 +218,145 @@ def deshacer(ctx: ToolContext, batch_id: str | None = None) -> str:
     if not batch:
         return "Nada que deshacer."
     consulta = _col(ctx.chat_id).where(filter=FieldFilter("batch_id", "==", batch))
-    lote = [s.to_dict() for s in consulta.stream()]
-    registros = [d for d in lote if d["tipo"] == "registro"]
+    lote = [(s.id, s.to_dict()) for s in consulta.stream()]
+    registros = [(i, d) for i, d in lote if d["tipo"] == "registro"]
     if not registros:
         return "Lote no encontrado."
     hecho = f"↩ deshecho: {len(registros)} fila(s)"
     ya = "Ese lote ya estaba deshecho."
-    previos = [d for d in lote if d["tipo"] == "reverso"]
+    previos = [d for _, d in lote if d["tipo"] == "reverso"]
     if previos:
         # Same update = Pub/Sub retry: report success again, write nothing.
         retry = all(d["update_id"] == ctx.update_id for d in previos)
         return hecho if retry else ya
     reversos = {
-        f"{batch}-r{i}": {
-            **d,
-            "monto": str(-q(d["monto"])),
-            "update_id": ctx.update_id,
-            "tipo": "reverso",
-        }
-        for i, d in enumerate(registros)
+        f"{batch}-r{i}": _reverso(ctx, doc_id, d)
+        for i, (doc_id, d) in enumerate(registros)
     }
     return hecho if _crear(ctx.chat_id, reversos) else ya
 
 
-# ponytail: sums ignore moneda (one currency per user); add FX if users mix them.
+# ponytail: scans the last max(50, 10n) writes; movements older than that (behind
+# many reversos) are not listed. Page further back if users edit old rows.
+def _vigentes(ctx: ToolContext, n: int) -> list[tuple[str, dict]]:
+    """Last n registros not cancelled by a reverso, newest first."""
+    consulta = (
+        _col(ctx.chat_id)
+        .order_by("creado", direction=firestore.Query.DESCENDING)
+        .limit(max(50, 10 * n))
+    )
+    docs = [(s.id, s.to_dict()) for s in consulta.stream()]
+    reversos = [d for _, d in docs if d["tipo"] == "reverso"]
+    anulados = {d["reversa"] for d in reversos if "reversa" in d}
+    # Reversos written before ``reversa`` existed cancel their whole batch.
+    lotes = {d["batch_id"] for d in reversos if "reversa" not in d}
+    return [
+        (i, d)
+        for i, d in docs
+        if d["tipo"] == "registro" and i not in anulados and d["batch_id"] not in lotes
+    ][:n]
+
+
+def ultimos(ctx: ToolContext, n: int = 5) -> list[dict]:
+    salida = []
+    for indice, (doc_id, d) in enumerate(_vigentes(ctx, n), start=1):
+        mov = {
+            "indice": indice,
+            "id": doc_id,
+            "fecha": d["fecha"],
+            "tipo_mov": d["tipo_mov"],
+            "monto": d["monto"],
+            "monto_original": d.get("monto_original", d["monto"]),
+            "moneda_original": d.get("moneda_original", d.get("moneda", "USD")),
+            "nota": d.get("nota", ""),
+        }
+        campo = "categoria" if d["tipo_mov"] == "gasto" else "fuente"
+        mov[campo] = d.get(campo, "")
+        salida.append(mov)
+    return salida
+
+
+def ultimos_texto(ctx: ToolContext, n: int = 5) -> str:
+    lineas = [
+        f"{m['indice']}) {date.fromisoformat(m['fecha']):%d/%m} {_texto(m, ' ')}"
+        for m in ultimos(ctx, n)
+    ]
+    return "\n".join(lineas) or "Sin movimientos."
+
+
+def _repetido(ctx: ToolContext) -> dict | None:
+    """Docs this update already wrote with editar/anular (a Pub/Sub retry)."""
+    consulta = _col(ctx.chat_id).where(
+        filter=FieldFilter("update_id", "==", ctx.update_id)
+    )
+    docs = {s.id: s.to_dict() for s in consulta.stream()}
+    rev = [d for i, d in docs.items() if d["tipo"] == "reverso" and i.endswith("-x")]
+    if not rev:
+        return None
+    return docs.get(f"{ctx.update_id}-e0", rev[0])
+
+
+def _elegir(ctx: ToolContext, indice: int) -> tuple[str, dict] | None:
+    if indice < 1:
+        return None
+    movs = _vigentes(ctx, indice)
+    return movs[indice - 1] if len(movs) >= indice else None
+
+
+def anular(ctx: ToolContext, indice: int = 1) -> str:
+    previo = _repetido(ctx)
+    if previo is not None:
+        return f"✓ anulado: {_texto(previo)}"
+    elegido = _elegir(ctx, indice)
+    if elegido is None:
+        return NO_ENCONTRADO
+    doc_id, d = elegido
+    # Reverso id per registro: two updates can never cancel the same row twice.
+    if not _crear(ctx.chat_id, {f"{doc_id}-x": _reverso(ctx, doc_id, d)}):
+        return NO_ENCONTRADO
+    return f"✓ anulado: {_texto(d)}"
+
+
+def editar(
+    ctx: ToolContext,
+    indice: int = 1,
+    monto: Decimal | None = None,
+    moneda: str | None = None,
+    categoria: str | None = None,
+    nota: str | None = None,
+) -> str:
+    """Reverso of the chosen movement plus a new registro with merged fields."""
+    previo = _repetido(ctx)
+    if previo is not None:
+        return f"✓ editado: {_texto(previo)}"
+    elegido = _elegir(ctx, indice)
+    if elegido is None:
+        return NO_ENCONTRADO
+    doc_id, d = elegido
+    usd = _fx(
+        d.get("monto_original", d["monto"]) if monto is None else monto,
+        moneda or d.get("moneda_original", d.get("moneda", "USD")),
+        date.fromisoformat(d["fecha"]),
+    )
+    if isinstance(usd, str):
+        return usd
+    campo = "categoria" if d["tipo_mov"] == "gasto" else "fuente"
+    nuevo = {
+        **{k: v for k, v in d.items() if k != "creado"},
+        **usd,
+        "batch_id": f"e{ctx.update_id}",
+        "update_id": ctx.update_id,
+    }
+    if categoria is not None:
+        nuevo[campo] = categoria.strip() or ("otros" if campo == "categoria" else "")
+    if nota is not None:
+        nuevo["nota"] = nota
+    docs = {f"{doc_id}-x": _reverso(ctx, doc_id, d), f"{ctx.update_id}-e0": nuevo}
+    if not _crear(ctx.chat_id, docs):
+        return NO_ENCONTRADO
+    return f"✓ editado: {_texto(nuevo)}"
+
+
 def gastos_por_categoria(chat_id: str, desde: date, hasta: date) -> dict[str, Decimal]:
     """Net spend per category (registro + reverso) in the inclusive range."""
     totales: dict[str, Decimal] = {}
@@ -208,7 +376,7 @@ def resumen_finanzas(ctx: ToolContext, periodo: str) -> str:
     gastos = gastos_por_categoria(ctx.chat_id, desde, hasta)
     total = sum(gastos.values(), Decimal("0.00"))
     ingresos = total_ingresos(ctx.chat_id, desde, hasta)
-    texto = f"{periodo}: gastos {total} {ctx.moneda}, ingresos {ingresos} {ctx.moneda}"
+    texto = f"{periodo}: gastos {total} USD, ingresos {ingresos} USD"
     top = max(gastos, key=lambda c: gastos[c], default=None)
     if top is not None and gastos[top] > 0:
         texto += f"; mayor {top} {gastos[top]}"

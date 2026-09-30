@@ -67,7 +67,7 @@ def linea_exceso(
     key, gastado, cap = exceso
     regla = "" if presupuesto else " (50/30/20)"
     return (
-        f"Exceso en {key}{regla}: {gastado} de {cap} {ctx.moneda} "
+        f"Exceso en {key}{regla}: {gastado} de {cap} USD "
         f"(+{gastado - cap}). Recorta ahí primero."
     )
 

@@ -6,8 +6,10 @@
   A 90-day lifecycle rule on ``backup/`` bounds it.
 - ``export_ledger``: daily CSV of yesterday's ledger writes (all chats) to
   ``ledger/mes=YYYY-MM/YYYY-MM-DD.csv``, kept forever for the BigQuery external
-  table ``botjonh.ledger`` and Looker Studio. The worker may only create objects,
-  so an existing file means the day is already exported.
+  table ``botjonh.ledger`` and Looker Studio. ``monto`` is USD; files written
+  before the USD ledger lack the last three columns (jagged rows are allowed).
+  The worker may only create objects, so an existing file means the day is
+  already exported.
 """
 
 from __future__ import annotations
@@ -33,7 +35,8 @@ log = logging.getLogger(__name__)
 COLLECTIONS = ("users", "preferences", "invites", "pending")
 CSV_FIELDS = (
     "fecha", "chat_id", "tipo_mov", "categoria", "monto",
-    "moneda", "nota", "batch_id", "tipo",
+    "moneda", "nota", "batch_id", "tipo", "monto_original", "moneda_original",
+    "tasa",
 )  # fmt: skip
 
 

@@ -30,7 +30,7 @@ def _digest(ctx: ToolContext) -> str | None:
     ayer = ledger.hoy(ctx) - timedelta(days=1)
     gastado = sum(ledger.gastos_por_categoria(ctx.chat_id, ayer, ayer).values())
     if gastado:
-        lineas.append(f"Ayer: {gastado} {ctx.moneda}.")
+        lineas.append(f"Ayer: {gastado} USD.")
     return "\n".join(lineas) or None
 
 
@@ -52,7 +52,7 @@ def _weekly(ctx: ToolContext) -> str | None:
         return None
     semana = Decimal(7) / cal.monthrange(dia.year, dia.month)[1]
     lineas = [
-        f"Semana: {total} {ctx.moneda}.",
+        f"Semana: {total} USD.",
         budgets.linea_exceso(ctx, gastos, semana),
     ]
     return "\n".join(line for line in lineas if line)
