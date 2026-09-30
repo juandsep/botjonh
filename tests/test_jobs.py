@@ -172,6 +172,8 @@ def test_backup_writes_json_objects(
     assert movs == {
         "ledger/42/movimientos/100-0": {"monto": "2.00", "tipo_mov": "gasto"}
     }
+    backup.run(SETTINGS)  # a Pub/Sub retry the same day: create-only, no error
+    assert len(gcs.uploads) == 5
 
 
 def test_backup_skipped_without_bucket(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -57,10 +57,16 @@ def run(settings: WorkerSettings) -> None:
     }
     bucket = _bucket(settings)
     for nombre, data in objetos.items():
-        bucket.blob(f"backup/{dia}/{nombre}").upload_from_string(
-            json.dumps(data, default=str, ensure_ascii=False),
-            content_type="application/json",
-        )
+        # The worker may only create objects; on a retry the object from the
+        # first attempt is already there, so the backup is done.
+        try:
+            bucket.blob(f"backup/{dia}/{nombre}").upload_from_string(
+                json.dumps(data, default=str, ensure_ascii=False),
+                content_type="application/json",
+                if_generation_match=0,
+            )
+        except PreconditionFailed:
+            log.info("backup_exists object=%s", nombre)
     log.info("backup_done objects=%d", len(objetos))
 
 
