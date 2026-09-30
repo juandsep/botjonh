@@ -2,8 +2,9 @@ name: Deploy
 
 on:
   push:
+    # Releases deploy from main; a tag only marks the release (the production
+    # environment accepts main only).
     branches: [dev, main]
-    tags: ["v*"]
 
 concurrency:
   group: deploy-${{ github.ref }}
