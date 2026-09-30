@@ -21,13 +21,18 @@ testers, on GCP for about $1–2/month (LLM tokens only).
 
 ## Architecture
 
-```
-Telegram ──webhook──▶ assistant-api (Cloud Run) ──▶ Pub/Sub assistant-updates ──▶ assistant-worker (Cloud Run)
-Cloud Scheduler ─────────────────────────────────▶ Pub/Sub assistant-cron ───────▶ assistant-worker
-Cloud Tasks assistant-reminders ─────────────────────────────── /tasks/reminder ──▶ assistant-worker
-Google/Apple/Outlook ──GET /ics/{token}.ics──▶ assistant-api                             │
-                                                                   DeepSeek · Firestore · MLflow
-```
+![botjonh on GCP](docs/architecture/architecture.png)
+
+One expense message (`café 2000cop`), handled without the LLM:
+
+![One expense message](docs/architecture/expense-turn.png)
+
+Interactive versions (theme, zoom, guided views): open
+[`docs/architecture/architecture.html`](docs/architecture/architecture.html) and
+[`docs/architecture/expense-turn.html`](docs/architecture/expense-turn.html)
+locally. They are generated with [archify](https://github.com/tt-a1i/archify)
+from the `.json` specs next to them; edit the spec and re-render instead of
+editing the HTML.
 
 Two Cloud Run services on purpose: Cloud Run does not guarantee CPU between
 requests, so `assistant-api` acknowledges the webhook in under 300 ms and only
