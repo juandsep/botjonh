@@ -384,7 +384,7 @@ def test_quick_ingreso_without_gif_stored(st, llm, tg, ledger) -> None:
 
 
 def test_quick_errors_never_5xx(st, llm, tg, ledger, caplog) -> None:
-    client.post("/push", json=envelope(message("-5 cafe")))
+    client.post("/push", json=envelope(message("0 cafe")))
     ledger.registrar_gasto.assert_not_called()
     ledger.registrar_gasto.side_effect = RuntimeError("down")
     assert client.post("/push", json=envelope(message("cafe 5"))).status_code == 204
@@ -545,3 +545,39 @@ def test_other_links_are_not_treated_as_calendars(monkeypatch, st, llm, tg) -> N
     monkeypatch.setitem(sys.modules, "assistant.services.busy", busy)
     client.post("/push", json=envelope(message("https://example.com/x")))
     busy.conectar.assert_not_called()
+
+
+def test_bare_amount_asks_and_registers_the_chosen_type(
+    monkeypatch, st, llm, tg, ledger
+) -> None:
+    pending: dict[str, dict] = {}
+
+    def create(chat_id, action):
+        pending["tok" + str(len(pending))] = action
+        return "tok" + str(len(pending) - 1)
+
+    st.create_pending.side_effect = create
+    st.pop_pending.side_effect = lambda chat_id, t: pending.pop(t, None)
+    st.random_gif.return_value = None
+    client.post("/push", json=envelope(message("5")))
+    asked = [
+        json.loads(c.request.read())
+        for c in tg.calls
+        if c.request.url.path.endswith("sendMessage")
+    ][-1]
+    assert asked["text"] == "¿5.00 USD: gasto o ingreso?"
+    buttons = asked["reply_markup"]["inline_keyboard"][0]
+    assert [b["callback_data"] for b in buttons] == ["g:tok0", "i:tok0"]
+    ledger.registrar_ingreso.assert_not_called()
+    client.post("/push", json=envelope(callback("i:tok0")))
+    kwargs = ledger.registrar_ingreso.call_args.kwargs
+    assert (kwargs["monto"], kwargs["moneda"], kwargs["fuente"]) == (
+        Decimal("5.00"),
+        "USD",
+        "",
+    )
+    assert sent_texts(tg)[-1] == "+1000.00 USD · salario"  # no GIF: text fallback
+    client.post("/push", json=envelope(callback("g:tok0")))  # single use
+    assert sent_texts(tg)[-1] == "La confirmación expiró."
+    ledger.registrar_gasto.assert_not_called()
+    llm.run_turn.assert_not_called()

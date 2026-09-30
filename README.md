@@ -132,8 +132,10 @@ merging `dev` into `main` deploys production.
 A message with exactly one amount is registered by code, without the LLM (zero
 tokens): `gasto 2 usd cafe`, `2 usd cafe`, `cafe 2000cop gasto`, `2000 cop cafe`,
 `cafe 5`, `$3.50 uber`, `1.234,56 cop arriendo`, `1000usd ingreso`,
-`ingreso 1000 salario`. The word `ingreso` makes it income; anything else is an
-expense (`gasto` is optional). The currency is an ISO code next to the amount
+`ingreso 1000 salario`, `+500 salario`. The word `ingreso` or a leading `+`
+makes it income; `gasto`, a leading `-` or any other words make it an expense.
+A bare amount (`5`, `5 usd`) is not guessed: the bot asks with Gasto / Ingreso
+buttons and registers on the tap. The currency is an ISO code next to the amount
 (USD, COP, EUR, MXN, PEN, CLP, ARS, BRL, GBP, CAD, PAB), `$` or `€`; none means
 USD. The ledger converts to USD. `2,000`/`2.000` are thousands, `2,5` is 2.5.
 The rest of the words are the note; a few keywords pick the category (`cafe` →

@@ -326,6 +326,47 @@ def handle_call(ctx: ToolContext, name: str, raw: str) -> tuple[str, str | None]
     return question, token
 
 
+def ask_tipo(
+    ctx: ToolContext, monto: Decimal, moneda: str
+) -> tuple[str, list[list[tuple[str, str]]]]:
+    """A bare amount: store it and ask with Gasto / Ingreso buttons."""
+    args = {
+        "monto": str(monto),
+        "moneda": moneda,
+        "fecha": ctx.ahora.date().isoformat(),
+    }
+    token: str = _state().create_pending(
+        ctx.chat_id, {"tool": "elegir_tipo", "args": args}
+    )
+    pregunta = f"¿{monto:.2f} {moneda}: gasto o ingreso?"
+    return pregunta, [[("Gasto", f"g:{token}"), ("Ingreso", f"i:{token}")]]
+
+
+def execute_tipo(ctx: ToolContext, token: str, tipo: str) -> str:
+    """Register the amount stored by ``ask_tipo`` as the chosen type."""
+    action = _state().pop_pending(ctx.chat_id, token)
+    if not action or action.get("tool") != "elegir_tipo":
+        return "La confirmación expiró."
+    a = action.get("args", {})
+    if tipo == "gasto":
+        name = "registrar_gasto"
+        raw = {
+            "items": [{"monto": a.get("monto"), "categoria": "otros"}],
+            "moneda": a.get("moneda"),
+            "fecha": a.get("fecha"),
+        }
+    else:
+        name = "registrar_ingreso"
+        raw = {
+            "monto": a.get("monto"),
+            "moneda": a.get("moneda"),
+            "fuente": "",
+            "fecha": a.get("fecha"),
+        }
+    # Stored data crosses a trust boundary: validate like any tool call.
+    return _run(ctx, name, validate_args(name, json.dumps(raw)))
+
+
 def execute_pending(ctx: ToolContext, token: str) -> str:
     """Run the call stored for an ``ok:<token>`` button (single use).
 

@@ -1,5 +1,9 @@
 """Deterministic quick entry: ``2 usd cafe``, ``1000usd ingreso``. No LLM.
 
+Type: the word ``ingreso`` or a leading ``+`` means income; ``gasto`` or a
+leading ``-`` means expense; any other words default to expense. A bare amount
+(``5``, ``5 usd``) has ``tipo == ""``: the worker asks gasto or ingreso.
+
 ``parse`` accepts a short message with exactly one amount in any word order and
 returns an ``Entry``; anything it is not sure about (two amounts, questions,
 dates, times, edits, reminders) returns None so the LLM handles it.
@@ -53,7 +57,7 @@ NOT_POSITIVE = "El monto debe ser mayor que 0."
 
 @dataclass(frozen=True)
 class Entry:
-    tipo: str  # gasto | ingreso
+    tipo: str  # gasto | ingreso | "" (bare amount: ask)
     monto: Decimal
     moneda: str
     nota: str
@@ -116,7 +120,7 @@ def amount(text: str) -> tuple[Decimal, str | None] | None:
 
 
 def parse(text: str) -> Entry | None:
-    raw = text.split()
+    raw = text.replace("\u2212", "-").split()  # "−5" (minus sign) as "-5"
     toks = [norm(t).strip(".,;:!") for t in raw]
     joined = " ".join(toks)
     if (
@@ -135,13 +139,20 @@ def parse(text: str) -> Entry | None:
         return None
     i = amounts[0]
     value, moneda = _amount(toks[i]) or (Decimal(0), None)
+    signo = toks[i][:1] if toks[i][:1] in "+-" else ""
+    value = abs(value)
     used = {i}
     if moneda is None:
         for j in (i + 1, i - 1):
             if 0 <= j < len(toks) and toks[j] in _CUR:
                 moneda, used = _CUR[toks[j]], {i, j}
                 break
-    tipo = "ingreso" if "ingreso" in toks else "gasto"
+    if "ingreso" in toks or signo == "+":
+        tipo = "ingreso"
+    elif "gasto" in toks or "gaste" in toks or signo == "-":
+        tipo = "gasto"
+    else:
+        tipo = "gasto"  # words without a type: an expense
     words = [
         (raw[k].strip(".,;:!"), toks[k])
         for k in range(len(raw))
@@ -149,9 +160,12 @@ def parse(text: str) -> Entry | None:
     ]
     if words and words[0][1] in _LEAD:
         words = words[1:]
+    decidido = signo or {"ingreso", "gasto", "gaste"}.intersection(toks)
+    if not words and not decidido:
+        tipo = ""  # a bare amount: gasto or ingreso is the user's call
     nota = " ".join(w for w, _ in words)
     categoria = ""
-    if tipo == "gasto":
+    if tipo != "ingreso":
         found = (_CATEGORIA.get(n) for _, n in words)
         categoria = next((c for c in found if c), "otros")
     return Entry(

@@ -242,6 +242,19 @@ def _quick(
     if entry.error:
         _send(channel, msg, entry.error)
         return
+    if not entry.tipo:  # a bare amount: ask, register on the button
+        from assistant.llm import tools
+
+        try:
+            pregunta, teclado = tools.ask_tipo(ctx, entry.monto, entry.moneda)
+        except Exception as exc:
+            logger.error(
+                "quick_failed update_id=%s error=%s", msg.update_id, type(exc).__name__
+            )
+            _send(channel, msg, FAILED_REPLY)
+            return
+        _send(channel, msg, pregunta, teclado)
+        return
     fecha = ctx.ahora.date()
     try:
         ledger = importlib.import_module("assistant.services.ledger")
@@ -269,11 +282,16 @@ def _quick(
         _send(channel, msg, FAILED_REPLY)
         return
     logger.info("quick_entry update_id=%s", msg.update_id)
-    registrado = str(reply).startswith(("−", "+"))
-    # A registration answers with the reaction GIF only; the text is the
-    # fallback when no GIF is stored (or on errors such as a missing rate).
-    if not (registrado and _gif(channel, msg, entry.tipo)):
-        _send(channel, msg, str(reply))
+    _registro(channel, msg, str(reply))
+
+
+def _registro(channel: Telegram, msg: InboundMessage, reply: str) -> None:
+    """A registration answers with the reaction GIF only; the text is the
+    fallback when no GIF is stored, and the answer to anything else (errors
+    such as a missing rate)."""
+    tipo = {"−": "gasto", "+": "ingreso"}.get(reply[:1])
+    if not (tipo and _gif(channel, msg, tipo)):
+        _send(channel, msg, reply)
 
 
 def _ledger_command(
@@ -355,6 +373,20 @@ def _callback(
     except httpx.HTTPError:
         logger.warning("answer_callback_failed update_id=%s", msg.update_id)
     action, _, token = (msg.callback_data or "").partition(":")
+    if action in ("g", "i"):  # a bare amount: gasto or ingreso
+        from assistant.llm.tools import execute_tipo
+
+        try:
+            tipo = "gasto" if action == "g" else "ingreso"
+            _registro(channel, msg, execute_tipo(ctx, token, tipo))
+        except Exception as exc:
+            logger.error(
+                "pending_failed update_id=%s error=%s",
+                msg.update_id,
+                type(exc).__name__,
+            )
+            _send(channel, msg, FAILED_REPLY)
+        return ACK
     if action == "ok":
         from assistant.llm.tools import execute_pending
 
@@ -367,7 +399,7 @@ def _callback(
                 type(exc).__name__,
             )
             reply = FAILED_REPLY
-        _send(channel, msg, reply)
+        _registro(channel, msg, reply)
     elif action == "no":
         state.pop_pending(msg.chat_id, token)
         _send(channel, msg, "Cancelado.")
