@@ -36,7 +36,7 @@ def invitar_beta(ctx, nombre: str) -> str            # owner only, checked in co
 def listar_usuarios(ctx) -> str                      # owner only
 ```
 
-## services/ledger.py, fx.py, budgets.py, agenda.py, busy.py
+## services/ledger.py, fx.py, budgets.py, agenda.py, busy.py, gcal.py
 
 ```python
 # ledger: Firestore ledger/{chat_id}/movimientos, append-only (never edits or
@@ -105,6 +105,17 @@ def ics(chat_id: str, ahora: datetime) -> str        # VCALENDAR, -30 d to +365 
 # missing or raising, the agenda ignores it (logs the error class only).
 def ocupados(chat_id: str, desde: datetime, hasta: datetime) -> list[tuple[datetime, datetime, str]]
 def conectar(ctx, url: str) -> str                   # /conectar <url>
+# gcal: mirror into the user's own Google Calendar, shared with the worker SA
+# ("Make changes to events"); preferences/{chat_id}.gcal_id in clear. Calendar
+# REST v3 over httpx, ADC scope calendar.events, 5 s. Google event id =
+# "bj" + sha256(chat_id:evento_id)[:40] (base32hex-safe): insert 409 and delete
+# 404/410 count as done. Mirror calls never raise (log codes only); agenda calls
+# them after the Firestore write via importlib. ocupados reads events.list and
+# skips our own "bj…" ids, so an event never conflicts with its mirror.
+def vincular(ctx, calendar_id: str) -> str           # /vincular <id|off>; write probe
+def espejo_crear(ctx, evento_id: str, evento: dict) -> None
+def espejo_cancelar(ctx, evento_id: str) -> None
+def ocupados(chat_id: str, desde: datetime, hasta: datetime) -> list[tuple[datetime, datetime, str]]
 ```
 
 Conflicts: `llm/tools.py` calls `agenda.conflictos` before `crear_evento` and
@@ -161,7 +172,8 @@ private Cloud Run URL, any error only logged. Skipped when
 ## Worker routes without the LLM
 
 - `/calendario` (next 7 days), `/calendario enlace` (ICS URL, token created if
-  missing), `/calendario nuevo` (rotate), `/conectar <url>` (`busy.conectar`).
+  missing), `/calendario nuevo` (rotate), `/conectar <url>` (`busy.conectar`),
+  `/vincular <id|off>` (`gcal.vincular`; alone: how-to).
 - `POST /tasks/reminder` `{"chat_id", "evento_id"}` from Cloud Tasks: sends
   `agenda.aviso`; always 2xx except a Firestore failure.
 - api `GET /ics/{token}.ics`: public, 404 for a bad or unknown token.

@@ -101,6 +101,7 @@ see [Configuration](#configuration).
    anular - anular un movimiento: /anular 1
    gif - guardar GIFs de reacción
    conectar - conectar tu calendario (enlace iCal secreto)
+   vincular - vincular tu Google Calendar (instantáneo)
    start - activar
    ```
 
@@ -214,6 +215,18 @@ retry never duplicates; cancelling only flips `estado`.
   or `cuando` for a recordatorio), so Telegram pings you on the minute. Cloud
   Tasks schedules at most 30 days ahead; later reminders are enqueued by the
   morning digest once they are within 30 days. Cancelling deletes the task.
+
+### Google Calendar (instant)
+
+Share your Google Calendar with
+`assistant-worker@jd-botjonh.iam.gserviceaccount.com` (Settings → your
+calendar → Share with specific people → **Make changes to events**), then send
+`/vincular <calendar_id>` (for a personal account the primary calendar id is
+your Gmail address; `/vincular off` unlinks). From then on every create and
+cancel is mirrored there within seconds, and conflicts read that calendar
+directly (your own mirrored events never clash with themselves). Firestore
+stays the source of truth; the mirror is best effort. Requires the Calendar API
+(`calendar-json.googleapis.com`) enabled in the project.
 
 ### Subscribe from your calendar app
 

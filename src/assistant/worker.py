@@ -50,6 +50,11 @@ CONECTAR_HINT = (
     "Envíame el enlace iCal secreto de tu calendario. Google: Configuración → "
     "tu calendario → Integrar el calendario → Dirección secreta en formato iCal."
 )
+VINCULAR_HINT = (
+    "Comparte tu Google Calendar con "
+    "assistant-worker@jd-botjonh.iam.gserviceaccount.com (Hacer cambios en "
+    "eventos) y envía /vincular <id>. En una cuenta personal el id es tu Gmail."
+)
 LEDGER_COMMANDS = ("/ultimos", "/editar", "/anular", "/gif")
 REGISTROS = {"registrar_gasto": "gasto", "registrar_ingreso": "ingreso"}
 
@@ -140,7 +145,7 @@ def handle_update(msg: InboundMessage, settings: WorkerSettings) -> int:
         return ACK
     if _is_ical_url(msg.text):  # the link sent on its own, after /conectar
         msg = dataclasses.replace(msg, text=f"/conectar {msg.text.strip()}")
-    if msg.text.startswith(("/calendario", "/conectar")):
+    if msg.text.startswith(("/calendario", "/conectar", "/vincular")):
         reply = _command(ctx, msg, settings)
         if msg.text.startswith("/conectar ") and msg.message_id is not None:
             # The message holds the secret iCal URL: drop it from the chat.
@@ -211,7 +216,7 @@ def _is_ical_url(text: str) -> bool:
 
 
 def _command(ctx: ToolContext, msg: InboundMessage, settings: WorkerSettings) -> str:
-    """/calendario [enlace|nuevo] and /conectar <url>, without the LLM."""
+    """/calendario [enlace|nuevo], /conectar <url> and /vincular <id|off>."""
     cmd, _, arg = msg.text.strip().partition(" ")
     cmd, arg = cmd.split("@")[0], arg.strip()
     try:
@@ -223,6 +228,11 @@ def _command(ctx: ToolContext, msg: InboundMessage, settings: WorkerSettings) ->
             except ImportError:
                 return "Aún no disponible."
             return str(busy.conectar(ctx, arg))
+        if cmd == "/vincular":
+            if not arg:
+                return VINCULAR_HINT
+            gcal = importlib.import_module("assistant.services.gcal")
+            return str(gcal.vincular(ctx, arg))
         if arg in ("enlace", "nuevo"):
             if not settings.api_url:
                 return "Enlace no configurado."
