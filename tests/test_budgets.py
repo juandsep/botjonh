@@ -10,8 +10,9 @@ from assistant.context import ToolContext
 from assistant.services import budgets, ledger
 
 D = Decimal
+# A user whose old profile says COP still gets USD: the ledger is USD only.
 CTX = ToolContext(
-    "42", "owner", "USD", "America/Panama", 1,
+    "42", "owner", "COP", "America/Panama", 1,
     datetime(2026, 9, 29, 12, tzinfo=ZoneInfo("America/Panama")),
 )  # fmt: skip
 

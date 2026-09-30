@@ -218,6 +218,13 @@ def export_env(
                 "batch_id": "g100", "update_id": 101, "tipo": "reverso",
             },
             {
+                "fecha": "2026-09-28", "monto": "0.49", "moneda": "USD",
+                "categoria": "otros", "tipo_mov": "gasto", "nota": "café",
+                "batch_id": "g6", "update_id": 6, "tipo": "registro",
+                "monto_original": "2000.00", "moneda_original": "COP",
+                "tasa": "4081.63", "fuente_tasa": "trm",
+            },
+            {
                 "fecha": "2026-09-28", "monto": "900.00", "moneda": "USD",
                 "fuente": "salario", "tipo_mov": "ingreso", "nota": "",
                 "batch_id": "i5", "update_id": 5, "tipo": "registro",
@@ -247,9 +254,11 @@ def test_export_writes_yesterday_csv_in_panama(
     assert list(gcs.uploads) == ["ledger/mes=2026-09/2026-09-28.csv"]
     lines = gcs.uploads["ledger/mes=2026-09/2026-09-28.csv"].splitlines()
     assert lines == [
-        "fecha,chat_id,tipo_mov,categoria,monto,moneda,nota,batch_id,tipo",
-        '2026-09-28,42,gasto,supermercado,-2.00,USD,"pan, leche",g100,reverso',
-        "2026-09-28,42,ingreso,salario,900.00,USD,,i5,registro",
+        "fecha,chat_id,tipo_mov,categoria,monto,moneda,nota,batch_id,tipo,"
+        "monto_original,moneda_original,tasa",
+        '2026-09-28,42,gasto,supermercado,-2.00,USD,"pan, leche",g100,reverso,,,',
+        "2026-09-28,42,gasto,otros,0.49,USD,café,g6,registro,2000.00,COP,4081.63",
+        "2026-09-28,42,ingreso,salario,900.00,USD,,i5,registro,,,",
     ]
 
 
