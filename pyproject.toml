@@ -1,5 +1,5 @@
 [project]
-name = "botjonh"
+name = "telegram-personal-assistant"
 version = "0.1.0"
 description = "Telegram personal assistant: expense tracking, budget advice and an agenda with exact reminders on GCP"
 readme = "README.md"
