@@ -9,7 +9,9 @@ range queries), ``ubicacion``, ``recordatorio_min``, ``tipo``
 turn), created with ``create()``: a Pub/Sub retry hits AlreadyExists and answers
 the same. Cancelling sets ``estado`` and never deletes. A reminder is a Cloud
 Task with a deterministic name that POSTs to the worker at the exact time.
-Doc paths and task names derive from chat_ids: never log them.
+Doc paths and task names derive from chat_ids: never log them. When the user
+linked a Google Calendar (``services/gcal.py``) each create/cancel is mirrored
+there too, best effort.
 """
 
 from __future__ import annotations
@@ -78,14 +80,24 @@ def _items(chat_id: str, desde: datetime, hasta: datetime) -> list[dict]:
 def _ocupados(
     ctx: ToolContext, desde: datetime, hasta: datetime
 ) -> list[tuple[datetime, datetime, str]]:
-    """External busy blocks; empty when the busy module is missing or fails."""
-    try:
-        busy = importlib.import_module("assistant.services.busy")
-        bloques = busy.ocupados(ctx.chat_id, desde, hasta)
-    except Exception as e:  # ImportError included: busy ships separately
-        log.error("busy_failed error=%s", type(e).__name__)
-        return []
+    """External busy blocks (ICS feed and linked Google Calendar, which already
+    skips our own mirrored events); a missing or failing source counts as none."""
+    bloques = []
+    for fuente in ("busy", "gcal"):
+        try:
+            mod = importlib.import_module(f"assistant.services.{fuente}")
+            bloques += mod.ocupados(ctx.chat_id, desde, hasta)
+        except Exception as e:  # ImportError included: sources ship separately
+            log.error("%s_failed error=%s", fuente, type(e).__name__)
     return [(a, b, label) for a, b, label in bloques if a < hasta and b > desde]
+
+
+def _espejo(fn: str, *args: Any) -> None:
+    """Best-effort mirror into the linked Google Calendar; never raises."""
+    try:
+        getattr(importlib.import_module("assistant.services.gcal"), fn)(*args)
+    except Exception as e:
+        log.error("gcal_failed error=%s", type(e).__name__)
 
 
 # --- reminders (Cloud Tasks) -----------------------------------------------------
@@ -208,6 +220,7 @@ def _guardar(
                 continue  # another item of the same turn
             log.info("agenda_retry")
         _programar(ctx.chat_id, evento_id, data, ctx.ahora)
+        _espejo("espejo_crear", ctx, evento_id, data)
         return f"✓ {inicio:%d/%m %H:%M} {titulo} [{evento_id}]"
     raise RuntimeError("agenda_ids_exhausted")
 
@@ -236,6 +249,7 @@ def cancelar_evento(ctx: ToolContext, evento_id: str) -> str:
         return "Evento no encontrado."
     ref.update({"estado": "cancelado"})
     _borrar_tarea(ctx.chat_id, evento_id)
+    _espejo("espejo_cancelar", ctx, evento_id)
     log.info("agenda_cancel")
     return "✓ evento cancelado"
 

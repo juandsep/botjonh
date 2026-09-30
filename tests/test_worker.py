@@ -307,6 +307,25 @@ def test_conectar(monkeypatch, st, llm, tg) -> None:
     llm.run_turn.assert_not_called()
 
 
+def test_vincular(monkeypatch, st, llm, tg) -> None:
+    vincular = MagicMock(return_value="✓ Google Calendar vinculado.")
+    monkeypatch.setitem(
+        sys.modules,
+        "assistant.services.gcal",
+        types.SimpleNamespace(vincular=vincular),
+    )
+    client.post("/push", json=envelope(message("/vincular")))
+    client.post("/push", json=envelope(message("/vincular yo@gmail.com")))
+    client.post("/push", json=envelope(message("/vincular off")))
+    assert sent_texts(tg) == [
+        worker.VINCULAR_HINT,
+        "✓ Google Calendar vinculado.",
+        "✓ Google Calendar vinculado.",
+    ]
+    assert [c.args[1] for c in vincular.call_args_list] == ["yo@gmail.com", "off"]
+    llm.run_turn.assert_not_called()
+
+
 def test_conectar_deletes_the_message_with_the_url(monkeypatch, st, llm, tg) -> None:
     monkeypatch.setitem(
         sys.modules,
