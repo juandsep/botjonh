@@ -112,6 +112,7 @@ jobs:
             WORKER_URL=${{ vars.WORKER_URL }}
             WORKER_SA=${{ vars.GCP_WORKER_SA }}
             TASKS_QUEUE=assistant-reminders
+            KMS_KEY=projects/${{ vars.GCP_PROJECT_ID }}/locations/${{ vars.GCP_REGION }}/keyRings/botjonh/cryptoKeys/ics-url
             TASKS_LOCATION=${{ vars.GCP_REGION }}
             API_URL=${{ vars.API_URL }}
           secrets: |

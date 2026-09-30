@@ -123,7 +123,15 @@ def handle_update(msg: InboundMessage, settings: WorkerSettings) -> int:
         _send(channel, msg, TEXT_ONLY)
         return ACK
     if msg.text.startswith(("/calendario", "/conectar")):
-        _send(channel, msg, _command(ctx, msg, settings))
+        reply = _command(ctx, msg, settings)
+        if msg.text.startswith("/conectar ") and msg.message_id is not None:
+            # The message holds the secret iCal URL: drop it from the chat.
+            try:
+                channel.delete_message(msg.chat_id, msg.message_id)
+                reply += "\nBorré tu mensaje con el enlace."
+            except httpx.HTTPError:
+                logger.warning("delete_failed update_id=%s", msg.update_id)
+        _send(channel, msg, reply)
         return ACK
 
     # 1. Rate limit and daily cap: fail closed without calling the LLM.

@@ -75,6 +75,7 @@ resource "google_project_service" "apis" {
     "bigquery.googleapis.com",
     "cloudbuild.googleapis.com",
     "cloudresourcemanager.googleapis.com",
+    "cloudkms.googleapis.com",
     "cloudscheduler.googleapis.com",
     "cloudtasks.googleapis.com",
     "firestore.googleapis.com",
@@ -471,6 +472,30 @@ module "budget_guard" {
   billing_account = var.billing_account
   amount_usd      = var.monthly_budget_usd
   source_bucket   = google_storage_bucket.functions.name
+}
+
+# Encrypts each user's secret iCal URL before it reaches Firestore (and so the
+# backups). Key rings and keys cannot be deleted in GCP, hence prevent_destroy.
+resource "google_kms_key_ring" "botjonh" {
+  name       = "botjonh"
+  location   = var.region
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_kms_crypto_key" "ics_url" {
+  name            = "ics-url"
+  key_ring        = google_kms_key_ring.botjonh.id
+  rotation_period = "31536000s" # yearly; old versions stay to decrypt old data
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_kms_crypto_key_iam_member" "worker_uses_ics_key" {
+  crypto_key_id = google_kms_crypto_key.ics_url.id
+  role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+  member        = google_service_account.sa["worker"].member
 }
 
 # Values for the GitHub repository variables (see README).

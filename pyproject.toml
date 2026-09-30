@@ -17,6 +17,7 @@ dependencies = [
     "mlflow-skinny>=2.10.0",
     "icalendar>=7.3.0",
     "recurring-ical-events>=3.8.2",
+    "google-cloud-kms>=3.0.0",
 ]
 
 [build-system]

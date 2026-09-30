@@ -32,6 +32,7 @@ def parse_update(update: object) -> InboundMessage | None:
             chat_id=str(msg["chat"]["id"]),
             text=str(msg.get("text", "")),
             update_id=int(update["update_id"]),
+            message_id=msg.get("message_id"),
         )
     except (KeyError, TypeError, ValueError):
         return None
@@ -69,3 +70,6 @@ class Telegram(Channel):
             callback_query_id=callback_query_id,
             text=text,
         )
+
+    def delete_message(self, chat_id: str, message_id: int) -> None:
+        self._post("deleteMessage", chat_id=chat_id, message_id=message_id)

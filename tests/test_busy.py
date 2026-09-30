@@ -74,10 +74,35 @@ def clean_cache() -> None:
     busy._cache.clear()
 
 
+class FakeKms:
+    """Reversible stand-in for crypto; binds the ciphertext to the chat id."""
+
+    @staticmethod
+    def encrypt(key: str, plaintext: str, chat_id: str) -> str:
+        assert key == "k"
+        return f"enc:{chat_id}:{plaintext[::-1]}"
+
+    @staticmethod
+    def decrypt(key: str, ciphertext: str, chat_id: str) -> str:
+        prefix = f"enc:{chat_id}:"
+        if not ciphertext.startswith(prefix):
+            raise ValueError("aad mismatch")
+        return ciphertext[len(prefix) :][::-1]
+
+
+ENC = FakeKms.encrypt("k", URL, "42")
+
+
+@pytest.fixture(autouse=True)
+def kms(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(busy, "crypto", FakeKms)
+    monkeypatch.setattr(busy, "get_worker_settings", lambda: MagicMock(kms_key="k"))
+
+
 @pytest.fixture
 def state(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     mod = MagicMock()
-    mod.get_preferences.return_value = {"ics_url": URL}
+    mod.get_preferences.return_value = {"ics_url_enc": ENC}
     mod.get_user.return_value = {"zona_horaria": "America/Panama"}
     monkeypatch.setitem(sys.modules, "assistant.services.state", mod)
     return mod
@@ -155,7 +180,26 @@ def test_conectar_stores_url(db: MagicMock) -> None:
     assert busy.conectar(ctx(), URL) == "✓ Calendario conectado."
     db.collection.assert_called_with("preferences")
     db.collection().document.assert_called_with("42")
-    db.collection().document().set.assert_called_once_with({"ics_url": URL}, merge=True)
+    db.collection().document().set.assert_called_once_with(
+        {"ics_url_enc": ENC, "ics_url": firestore.DELETE_FIELD}, merge=True
+    )
+    stored = str(db.collection().document().set.call_args)
+    assert MARKER not in stored  # never in clear
+
+
+def test_conectar_refuses_without_kms_key(
+    db: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(busy, "get_worker_settings", lambda: MagicMock(kms_key=""))
+    with respx.mock:  # no fetch either
+        assert busy.conectar(ctx(), URL) == "Aún no disponible."
+    db.collection().document().set.assert_not_called()
+
+
+def test_ciphertext_of_another_chat_does_not_decrypt(state: MagicMock) -> None:
+    state.get_preferences.return_value = {"ics_url_enc": ENC}
+    with respx.mock:  # decrypt fails before any fetch
+        assert busy.ocupados("99", DESDE, HASTA) == []
 
 
 def test_conectar_rejects_invalid_without_fetch(db: MagicMock) -> None:
@@ -187,10 +231,11 @@ def test_unparseable_body_is_rejected(db: MagicMock) -> None:
 
 
 def test_off_disconnects(db: MagicMock) -> None:
-    busy._cache["42"] = (0.0, URL, None)
+    busy._cache["42"] = (0.0, ENC, None)
     assert busy.conectar(ctx(), "off") == "Calendario desconectado."
     db.collection().document().set.assert_called_once_with(
-        {"ics_url": firestore.DELETE_FIELD}, merge=True
+        {"ics_url": firestore.DELETE_FIELD, "ics_url_enc": firestore.DELETE_FIELD},
+        merge=True,
     )
     assert "42" not in busy._cache
 

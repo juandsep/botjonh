@@ -75,6 +75,9 @@ class WorkerSettings:
     tasks_location: str = "us-central1"
     # Public assistant-api URL, for the ICS subscription link.
     api_url: str = ""
+    # Cloud KMS key that encrypts each user's secret iCal URL. Empty: /conectar
+    # is refused, so the URL is never stored in clear.
+    kms_key: str = ""
     mlflow_tracking_uri: str = ""
     backup_bucket: str = ""
     llm_model: str = "deepseek-flash"
@@ -105,6 +108,7 @@ class WorkerSettings:
             tasks_queue=get("TASKS_QUEUE", "assistant-reminders"),
             tasks_location=get("TASKS_LOCATION", "us-central1"),
             api_url=get("API_URL", "").rstrip("/"),
+            kms_key=get("KMS_KEY", ""),
             mlflow_tracking_uri=get("MLFLOW_TRACKING_URI", ""),
             backup_bucket=get("BACKUP_BUCKET", ""),
             llm_model=get("LLM_MODEL", "deepseek-flash"),

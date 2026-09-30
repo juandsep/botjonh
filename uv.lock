@@ -85,6 +85,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "google-auth" },
     { name = "google-cloud-firestore" },
+    { name = "google-cloud-kms" },
     { name = "google-cloud-pubsub" },
     { name = "google-cloud-storage" },
     { name = "google-cloud-tasks" },
@@ -111,6 +112,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.110.0" },
     { name = "google-auth", specifier = ">=2.27.0" },
     { name = "google-cloud-firestore", specifier = ">=2.15.0" },
+    { name = "google-cloud-kms", specifier = ">=3.0.0" },
     { name = "google-cloud-pubsub", specifier = ">=2.19.0" },
     { name = "google-cloud-storage", specifier = ">=2.14.0" },
     { name = "google-cloud-tasks", specifier = ">=2.16.0" },
@@ -449,6 +451,23 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/cb/a6/ad4612cb0368fee76785e72a66be7203acdaaa89e41483f20cd7b1142b6e/google_cloud_firestore-2.33.0.tar.gz", hash = "sha256:1cbdeb51ddd2036d7493ee5453c6088b523170acde838b7dd9b75c17e20f7a1e", size = 672351, upload-time = "2026-09-29T19:26:04.766Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/da/2f/6e95cf1e477f779f5e022a96912a81650de6f2d05b1391d1cd4b16afe883/google_cloud_firestore-2.33.0-py3-none-any.whl", hash = "sha256:c9f7a097affad05617e19f9e974d495c3a70d8a550224fc1c19607505a43b53f", size = 443700, upload-time = "2026-09-29T19:25:39.613Z" },
+]
+
+[[package]]
+name = "google-cloud-kms"
+version = "3.17.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "google-api-core", extra = ["grpc"] },
+    { name = "google-auth" },
+    { name = "grpc-google-iam-v1" },
+    { name = "grpcio" },
+    { name = "proto-plus" },
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8d/42/8b07933cecb1d7826189ada6a315ac441253f041378a43d0fb38edf6e605/google_cloud_kms-3.17.0.tar.gz", hash = "sha256:b0a64538bef12851837a34ba567b52c147b89f809a45b5bcfedcfd63608c87a7", size = 436161, upload-time = "2026-09-17T20:30:27.147Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e7/be/ff4ba1cb41e08b3fdd033e1d9206bd24102e77dbe4bf7675e9f21c755d88/google_cloud_kms-3.17.0-py3-none-any.whl", hash = "sha256:081e790d1b94d8145ba49e6a391335e0372e2c3bf4f8174124249f37ab06ca8f", size = 352299, upload-time = "2026-09-17T20:29:55.682Z" },
 ]
 
 [[package]]

@@ -17,6 +17,7 @@ class InboundMessage:
     update_id: int
     callback_data: str | None = None
     callback_query_id: str | None = None
+    message_id: int | None = None
 
 
 class Channel(Protocol):
@@ -28,3 +29,5 @@ class Channel(Protocol):
     ) -> None: ...
 
     def answer_callback(self, callback_query_id: str, text: str) -> None: ...
+
+    def delete_message(self, chat_id: str, message_id: int) -> None: ...
