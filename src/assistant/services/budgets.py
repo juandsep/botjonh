@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from decimal import Decimal
 
 from assistant.context import BUCKET_OF, ToolContext
-from assistant.services import sheets
+from assistant.services import ledger
 
 # 50/30/20: ahorro (20%) is a floor, not a cap, so saving more is never an excess.
 CAPS = {"necesidades": Decimal("0.50"), "ocio": Decimal("0.30")}
@@ -40,7 +40,7 @@ def mayor_exceso(
         caps = {b: ingresos * pct for b, pct in CAPS.items()}
     peor = max(
         (
-            (k, gasto.get(k, Decimal(0)), sheets.q(cap * factor))
+            (k, gasto.get(k, Decimal(0)), ledger.q(cap * factor))
             for k, cap in caps.items()
         ),
         key=lambda t: t[1] - t[2],
@@ -53,12 +53,12 @@ def linea_exceso(
     ctx: ToolContext, gastos: Mapping[str, Decimal], factor: Decimal
 ) -> str | None:
     """One line on the largest excess; None when there is nothing to compare to."""
-    dia = sheets.hoy(ctx)
+    dia = ledger.hoy(ctx)
     prefs = importlib.import_module("assistant.services.state").get_preferences(
         ctx.chat_id
     )
     presupuesto = (prefs or {}).get("presupuesto")
-    ingresos = sheets.total_ingresos(ctx.chat_id, dia.replace(day=1), dia)
+    ingresos = ledger.total_ingresos(ctx.chat_id, dia.replace(day=1), dia)
     if not presupuesto and ingresos <= 0:
         return None
     exceso = mayor_exceso(gastos, presupuesto, ingresos, factor)
@@ -73,9 +73,9 @@ def linea_exceso(
 
 
 def recomendar_presupuesto(ctx: ToolContext, periodo: str = "mes") -> str:
-    dia = sheets.hoy(ctx)
-    desde, hasta = sheets.rango(periodo, dia)
-    gastos = sheets.gastos_por_categoria(ctx.chat_id, desde, hasta)
+    dia = ledger.hoy(ctx)
+    desde, hasta = ledger.rango(periodo, dia)
+    gastos = ledger.gastos_por_categoria(ctx.chat_id, desde, hasta)
     dias_mes = cal.monthrange(dia.year, dia.month)[1]
     factor = (
         Decimal(1) if periodo == "mes" else Decimal((hasta - desde).days + 1) / dias_mes

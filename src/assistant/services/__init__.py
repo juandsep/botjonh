@@ -1,1 +1,1 @@
-"""GCP-backed services: sheets, calendar, firestore state, budgets, pubsub."""
+"""GCP-backed services: calendar, ledger, firestore state, budgets, pubsub."""

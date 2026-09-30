@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from assistant.context import ToolContext
-from assistant.services import budgets, sheets
+from assistant.services import budgets, ledger
 
 D = Decimal
 CTX = ToolContext(
@@ -57,8 +57,8 @@ def test_recomendar_messages(monkeypatch: pytest.MonkeyPatch, prefs: MagicMock) 
         return {"restaurantes": D("400.00")}
 
     ingresos = MagicMock(return_value=D("0.00"))
-    monkeypatch.setattr(sheets, "gastos_por_categoria", gastos)
-    monkeypatch.setattr(sheets, "total_ingresos", ingresos)
+    monkeypatch.setattr(ledger, "gastos_por_categoria", gastos)
+    monkeypatch.setattr(ledger, "total_ingresos", ingresos)
     assert budgets.recomendar_presupuesto(CTX) == (
         "Sin presupuesto ni ingresos del mes para comparar."
     )

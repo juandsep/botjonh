@@ -35,7 +35,7 @@ def calls(monkeypatch):
         return fn
 
     for mod, names in {
-        "sheets": ["registrar_gasto", "registrar_ingreso", "resumen_finanzas"],
+        "ledger": ["registrar_gasto", "registrar_ingreso", "resumen_finanzas"],
         "budgets": ["recomendar_presupuesto"],
         "calendar": ["crear_evento", "listar_agenda", "cancelar_evento"],
         "state": ["invitar_beta", "listar_usuarios"],
@@ -43,7 +43,7 @@ def calls(monkeypatch):
         m = types.ModuleType(f"assistant.services.{mod}")
         for n in names:
             setattr(m, n, fake(n))
-        if mod == "sheets":
+        if mod == "ledger":
             m.deshacer = fake("deshacer")
         if mod == "state":
 

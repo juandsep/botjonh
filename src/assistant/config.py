@@ -67,7 +67,6 @@ class WorkerSettings:
     project_id: str
     telegram_bot_token: str
     deepseek_api_key: str
-    spreadsheet_id: str = ""
     calendar_id: str = ""
     mlflow_tracking_uri: str = ""
     backup_bucket: str = ""
@@ -94,7 +93,6 @@ class WorkerSettings:
             project_id=_require(values, "GCP_PROJECT_ID"),
             telegram_bot_token=_require(values, "TELEGRAM_BOT_TOKEN"),
             deepseek_api_key=_require(values, "DEEPSEEK_API_KEY"),
-            spreadsheet_id=get("SPREADSHEET_ID", ""),
             calendar_id=get("CALENDAR_ID", ""),
             mlflow_tracking_uri=get("MLFLOW_TRACKING_URI", ""),
             backup_bucket=get("BACKUP_BUCKET", ""),
