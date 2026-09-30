@@ -440,3 +440,16 @@ def test_totals_in_usd_for_any_user_currency(db: FakeDB, state: MagicMock) -> No
     assert ledger.resumen_finanzas(ctx, "mes") == (
         "mes: gastos 2.00 USD, ingresos 900.00 USD; mayor supermercado 2.00"
     )
+
+
+@respx.mock  # USD only
+def test_del_dia_skips_reversed_rows_and_batches(db: FakeDB, state: MagicMock) -> None:
+    dia = date(2026, 9, 29)
+    ledger.registrar_gasto(make_ctx(100), ITEMS, "USD", dia)  # g100: 2 rows
+    ledger.registrar_ingreso(make_ctx(101), Decimal(900), "USD", "salario", dia)
+    ledger.registrar_gasto(make_ctx(102), ITEMS[:1], "USD", date(2026, 9, 30))
+    assert [d["monto"] for d in ledger.del_dia("42", dia)] == ["2.00", "3.01", "900.00"]
+    state.last_batch.return_value = "g100"
+    ledger.deshacer(make_ctx(update_id=103))  # reverses the whole batch
+    assert [d["monto"] for d in ledger.del_dia("42", dia)] == ["900.00"]
+    assert ledger.del_dia("41", dia) == []

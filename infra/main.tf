@@ -416,8 +416,8 @@ resource "google_service_account_iam_member" "worker_acts_as_itself" {
 locals {
   jobs = {
     digest  = { schedule = "30 7 * * *", label = "morning digest" }
-    checkin = { schedule = "0 21 * * *", label = "end-of-day checkin" }
-    weekly  = { schedule = "0 19 * * 0", label = "weekly review" }
+    checkin = { schedule = "0 22 * * *", label = "list of the day's movements" }
+    weekly  = { schedule = "0 20 * * 0", label = "weekly spend vs income" }
   }
 }
 

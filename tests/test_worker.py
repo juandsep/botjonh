@@ -333,8 +333,8 @@ def ledger(monkeypatch):
     return fake_module(
         monkeypatch,
         "assistant.services.ledger",
-        registrar_gasto=MagicMock(return_value="✓ 2.00 USD → restaurantes"),
-        registrar_ingreso=MagicMock(return_value="✓ ingreso 1000.00 USD"),
+        registrar_gasto=MagicMock(return_value="−2.00 USD · cafe"),
+        registrar_ingreso=MagicMock(return_value="+1000.00 USD · salario"),
         ultimos_texto=MagicMock(return_value="1. cafe 2.00 USD"),
         editar=MagicMock(return_value="✓ editado"),
         anular=MagicMock(return_value="✓ anulado"),
@@ -362,7 +362,7 @@ def test_quick_gasto_skips_llm_and_sends_gif(st, llm, tg, ledger) -> None:
         "moneda": "COP",
         "fecha": ctx.ahora.date(),
     }
-    assert sent_texts(tg) == ["✓ 2.00 USD → restaurantes"]
+    assert sent_texts(tg) == []  # the GIF is the whole answer
     assert animations(tg) == [{"chat_id": "42", "animation": "gif1"}]
     st.random_gif.assert_called_once_with("42", "gasto")
     llm.run_turn.assert_not_called()
@@ -379,7 +379,7 @@ def test_quick_ingreso_without_gif_stored(st, llm, tg, ledger) -> None:
         "USD",
         "salario",
     )
-    assert sent_texts(tg) == ["✓ ingreso 1000.00 USD"] and animations(tg) == []
+    assert sent_texts(tg) == ["+1000.00 USD · salario"] and animations(tg) == []
     llm.run_turn.assert_not_called()
 
 
@@ -395,7 +395,7 @@ def test_quick_errors_never_5xx(st, llm, tg, ledger, caplog) -> None:
     assert sent_texts(tg) == [
         "El monto debe ser mayor que 0.",
         worker.FAILED_REPLY,
-        "✓ 2.00 USD → restaurantes",
+        "−2.00 USD · cafe",  # GIF failed: the text is the fallback
     ]
     assert "gif_failed" in caplog.text and "gif1" not in caplog.text
     assert "cafe" not in caplog.text

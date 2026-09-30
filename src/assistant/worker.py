@@ -269,8 +269,11 @@ def _quick(
         _send(channel, msg, FAILED_REPLY)
         return
     logger.info("quick_entry update_id=%s", msg.update_id)
-    _send(channel, msg, str(reply))
-    _gif(channel, msg, entry.tipo)
+    registrado = str(reply).startswith(("−", "+"))
+    # A registration answers with the reaction GIF only; the text is the
+    # fallback when no GIF is stored (or on errors such as a missing rate).
+    if not (registrado and _gif(channel, msg, entry.tipo)):
+        _send(channel, msg, str(reply))
 
 
 def _ledger_command(
@@ -320,16 +323,18 @@ def _save_gif(msg: InboundMessage, tipo: str, file_id: str | None) -> str:
     return GIF_USAGE.format(**counts)
 
 
-def _gif(channel: Telegram, msg: InboundMessage, tipo: str) -> None:
-    """Best effort reaction GIF after a registration; nothing when none stored."""
+def _gif(channel: Telegram, msg: InboundMessage, tipo: str) -> bool:
+    """Best effort reaction GIF after a registration; False when none was sent."""
     try:
         file_id = state.random_gif(msg.chat_id, tipo)
         if file_id:
             channel.send_animation(msg.chat_id, file_id)
+            return True
     except Exception as exc:
         logger.warning(
             "gif_failed update_id=%s error=%s", msg.update_id, type(exc).__name__
         )
+    return False
 
 
 def _send(

@@ -1,4 +1,5 @@
-"""Jobs: digest (07:30: ledger CSV, reminders), checkin (21:00), weekly (backup).
+"""Jobs: digest (07:30: ledger CSV, reminders), checkin (22:00: the day's list),
+weekly (Sunday 20:00: backup and the week against the month's income).
 
 The assistant is concise: a job messages a chat only when there is something to
 say. One failing chat never stops the others.
@@ -35,27 +36,53 @@ def _digest(ctx: ToolContext) -> str | None:
 
 
 def _checkin(ctx: ToolContext) -> str | None:
-    dia = ledger.hoy(ctx)
-    if ledger.gastos_por_categoria(ctx.chat_id, dia, dia):
-        return None
-    if ledger.total_ingresos(ctx.chat_id, dia, dia):
-        return None
-    return "¿Algún gasto hoy? Escríbelo y lo anoto."
+    """22:00: every movement of the day and the day's spend."""
+    movs = ledger.del_dia(ctx.chat_id, ledger.hoy(ctx))
+    if not movs:
+        return "Hoy no registraste gastos."
+    gastos = [d for d in movs if d["tipo_mov"] == "gasto"]
+    total = sum((ledger.q(d["monto"]) for d in gastos), Decimal("0.00"))
+    lineas = [f"Hoy ({len(movs)}):", *(ledger.texto(d) for d in movs)]
+    lineas.append(f"Total gastos: {total} USD")
+    return "\n".join(lineas)
 
 
 def _weekly(ctx: ToolContext) -> str | None:
+    """Sunday 20:00: the week's spend, and how much is left after saving 20%."""
     dia = ledger.hoy(ctx)
     desde, hasta = ledger.rango("semana", dia)
     gastos = ledger.gastos_por_categoria(ctx.chat_id, desde, hasta)
     total = sum(gastos.values(), Decimal("0.00"))
-    if not total:
+    inicio_mes = dia.replace(day=1)
+    ingresos = ledger.total_ingresos(ctx.chat_id, inicio_mes, dia)
+    if not total and not ingresos:
         return None
+    lineas = [f"Semana {desde:%d/%m}–{hasta:%d/%m}: {total} USD"]
+    top = sorted((kv for kv in gastos.items() if kv[1] > 0), key=lambda kv: -kv[1])
+    if top:
+        lineas.append("Top: " + " · ".join(f"{c} {v}" for c, v in top[:3]))
+    if ingresos <= 0:
+        lineas.append("Sin ingresos este mes: registra uno (1000usd ingreso).")
+        return "\n".join(lineas)
+    mes = ledger.gastos_por_categoria(ctx.chat_id, inicio_mes, dia)
+    gastado = sum(mes.values(), Decimal("0.00"))
+    ahorro = ledger.q(ingresos * Decimal("0.20"))
+    libre = ledger.q(ingresos - ahorro - gastado)
+    dias = cal.monthrange(dia.year, dia.month)[1] - dia.day
+    semanas = max(Decimal(dias) / 7, Decimal(1))
+    lineas.append(f"Mes: ingresos {ingresos}, gastos {gastado} USD.")
+    if libre >= 0:
+        lineas.append(
+            f"Ahorra {ahorro} (20%). Te quedan {libre} USD para el mes "
+            f"(~{ledger.q(libre / semanas)}/semana)."
+        )
+    else:
+        lineas.append(f"Te pasaste {-libre} USD: el ahorro de {ahorro} está en riesgo.")
     semana = Decimal(7) / cal.monthrange(dia.year, dia.month)[1]
-    lineas = [
-        f"Semana: {total} USD.",
-        budgets.linea_exceso(ctx, gastos, semana),
-    ]
-    return "\n".join(line for line in lineas if line)
+    exceso = budgets.linea_exceso(ctx, gastos, semana)
+    if exceso and exceso.startswith("Exceso"):
+        lineas.append(exceso)
+    return "\n".join(lineas)
 
 
 JOBS: dict[str, Callable[[ToolContext], str | None]] = {
