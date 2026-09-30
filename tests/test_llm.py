@@ -1,7 +1,7 @@
 import json
 import sys
 import types
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -37,7 +37,13 @@ def calls(monkeypatch):
     for mod, names in {
         "ledger": ["registrar_gasto", "registrar_ingreso", "resumen_finanzas"],
         "budgets": ["recomendar_presupuesto"],
-        "calendar": ["crear_evento", "listar_agenda", "cancelar_evento"],
+        "agenda": [
+            "crear_evento",
+            "listar_agenda",
+            "cancelar_evento",
+            "recordatorio",
+            "ver_libres",
+        ],
         "state": ["invitar_beta", "listar_usuarios"],
     }.items():
         m = types.ModuleType(f"assistant.services.{mod}")
@@ -45,6 +51,13 @@ def calls(monkeypatch):
             setattr(m, n, fake(n))
         if mod == "ledger":
             m.deshacer = fake("deshacer")
+        if mod == "agenda":
+            m.DURACION = {"evento": timedelta(hours=1), "recordatorio": timedelta(0)}
+            m.choques = []
+            m.conflictos = lambda ctx, inicio, fin, m=m: (
+                done.append(("conflictos", {"inicio": inicio, "fin": fin}))
+                or list(m.choques)
+            )
         if mod == "state":
 
             def create_pending(chat_id, action):
@@ -182,6 +195,29 @@ def test_execute_pending_runs_stored_call_once(calls) -> None:
     assert execute_pending(ctx(), "t1") == "ok cancelar_evento"
     assert calls == [("cancelar_evento", {"evento_id": "ev1"})]
     assert execute_pending(ctx(), "t1") == "La confirmación expiró."
+
+
+def test_event_without_conflict_runs_now(calls) -> None:
+    raw = '{"titulo": "Dentista", "inicio": "2026-09-30T09:00"}'
+    out, token = tools.handle_call(ctx(), "crear_evento", raw)
+    assert (out, token) == ("ok crear_evento", None)
+    assert calls[0] == (
+        "conflictos",
+        {"inicio": datetime(2026, 9, 30, 9), "fin": datetime(2026, 9, 30, 10)},
+    )
+
+
+def test_conflict_asks_and_confirming_skips_the_check(calls) -> None:
+    sys.modules["assistant.services.agenda"].choques = ["Dentista 09:00–10:00"]
+    raw = '{"texto": "Llamar", "cuando": "2026-09-30T09:30"}'
+    question, token = tools.handle_call(ctx(), "recordatorio", raw)
+    assert question == "Choca con Dentista 09:00–10:00. ¿Agendo igual?"
+    assert token == "t1" and [c[0] for c in calls] == ["conflictos"]
+    calls.clear()
+    assert execute_pending(ctx(), "t1") == "ok recordatorio"
+    assert calls == [
+        ("recordatorio", {"texto": "Llamar", "cuando": datetime(2026, 9, 30, 9, 30)})
+    ]
 
 
 def test_deshacer_always_needs_confirmation(calls) -> None:

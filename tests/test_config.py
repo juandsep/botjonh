@@ -27,8 +27,13 @@ def test_worker_defaults_and_overrides() -> None:
     s = WorkerSettings.from_env(BASE)
     assert s.llm_model == "deepseek-flash"
     assert s.max_llm_usd_per_day == Decimal("0.10")
-    s = WorkerSettings.from_env({**BASE, "MAX_MSGS_PER_MINUTE": "3"})
+    assert (s.worker_url, s.worker_sa, s.api_url) == ("", "", "")
+    assert (s.tasks_queue, s.tasks_location) == ("assistant-reminders", "us-central1")
+    s = WorkerSettings.from_env(
+        {**BASE, "MAX_MSGS_PER_MINUTE": "3", "WORKER_URL": "https://w/"}
+    )
     assert s.max_msgs_per_minute == 3
+    assert s.worker_url == "https://w"
 
 
 def test_dotenv_does_not_override(tmp_path, monkeypatch) -> None:

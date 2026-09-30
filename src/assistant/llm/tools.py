@@ -92,7 +92,7 @@ class RecomendarPresupuesto(_Args):
 
 
 class CrearEvento(_Args):
-    """Crea un evento en el calendario (hora local del usuario)."""
+    """Crea un evento en la agenda (hora local del usuario)."""
 
     titulo: str
     inicio: datetime
@@ -118,6 +118,12 @@ class Recordatorio(_Args):
 
     texto: str
     cuando: datetime
+
+
+class VerLibres(_Args):
+    """Huecos libres de 08:00 a 20:00 de un día (agenda y calendario conectado)."""
+
+    fecha: date
 
 
 class Deshacer(_Args):
@@ -151,13 +157,11 @@ TOOLS: dict[str, tuple[type[_Args], str]] = {
         RecomendarPresupuesto,
         "assistant.services.budgets:recomendar_presupuesto",
     ),
-    "crear_evento": (CrearEvento, "assistant.services.calendar:crear_evento"),
-    "listar_agenda": (ListarAgenda, "assistant.services.calendar:listar_agenda"),
-    "cancelar_evento": (
-        CancelarEvento,
-        "assistant.services.calendar:cancelar_evento",
-    ),
-    "recordatorio": (Recordatorio, "assistant.services.calendar:recordatorio"),
+    "crear_evento": (CrearEvento, "assistant.services.agenda:crear_evento"),
+    "listar_agenda": (ListarAgenda, "assistant.services.agenda:listar_agenda"),
+    "cancelar_evento": (CancelarEvento, "assistant.services.agenda:cancelar_evento"),
+    "recordatorio": (Recordatorio, "assistant.services.agenda:recordatorio"),
+    "ver_libres": (VerLibres, "assistant.services.agenda:ver_libres"),
     "deshacer": (Deshacer, "assistant.services.ledger:deshacer"),
     "invitar_beta": (InvitarBeta, "assistant.services.state:invitar_beta"),
     "listar_usuarios": (ListarUsuarios, "assistant.services.state:listar_usuarios"),
@@ -253,6 +257,19 @@ def _confirm_question(name: str, args: _Args) -> str | None:
     return None
 
 
+def _conflict_question(ctx: ToolContext, args: _Args) -> str | None:
+    """Ask before scheduling over an event or an external busy block."""
+    if isinstance(args, CrearEvento):
+        inicio, fin, tipo = args.inicio, args.fin, "evento"
+    elif isinstance(args, Recordatorio):
+        inicio, fin, tipo = args.cuando, None, "recordatorio"
+    else:
+        return None
+    agenda = importlib.import_module("assistant.services.agenda")
+    choques = agenda.conflictos(ctx, inicio, fin or inicio + agenda.DURACION[tipo])
+    return f"Choca con {', '.join(choques)}. ¿Agendo igual?" if choques else None
+
+
 def buttons(token: str) -> list[list[tuple[str, str]]]:
     return [[("Confirmar", f"ok:{token}"), ("Cancelar", f"no:{token}")]]
 
@@ -267,7 +284,7 @@ def handle_call(ctx: ToolContext, name: str, raw: str) -> tuple[str, str | None]
     args = validate_args(name, raw)
     if name in OWNER_ONLY and ctx.rol != "owner":
         raise ToolRejected("owner_only")
-    question = _confirm_question(name, args)
+    question = _confirm_question(name, args) or _conflict_question(ctx, args)
     if question is None:
         return _run(ctx, name, args), None
     token: str = _state().create_pending(
@@ -277,7 +294,11 @@ def handle_call(ctx: ToolContext, name: str, raw: str) -> tuple[str, str | None]
 
 
 def execute_pending(ctx: ToolContext, token: str) -> str:
-    """Run the call stored for an ``ok:<token>`` button (single use)."""
+    """Run the call stored for an ``ok:<token>`` button (single use).
+
+    Runs it directly, without the checks of ``handle_call``: the user already
+    confirmed, so conflicts are not checked again.
+    """
     action = _state().pop_pending(ctx.chat_id, token)
     if not action:
         return "La confirmación expiró."

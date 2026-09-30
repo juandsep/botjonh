@@ -13,7 +13,7 @@ from google.api_core.exceptions import PreconditionFailed
 import assistant.jobs as jobs
 from assistant.config import get_worker_settings
 from assistant.jobs import backup
-from assistant.services import budgets, calendar, ledger
+from assistant.services import agenda, budgets, ledger
 
 
 @pytest.fixture
@@ -25,7 +25,9 @@ def env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     monkeypatch.setitem(sys.modules, "assistant.services.state", state)
     telegram = MagicMock()
     monkeypatch.setattr(jobs, "Telegram", lambda token: telegram)
-    monkeypatch.setattr(calendar, "agenda", lambda ctx, rango: [])
+    monkeypatch.setattr(agenda, "agenda", lambda ctx, rango: [])
+    encolar = MagicMock()
+    monkeypatch.setattr(agenda, "encolar_recordatorios", encolar)
     monkeypatch.setattr(ledger, "gastos_por_categoria", lambda *a: {})
     monkeypatch.setattr(ledger, "total_ingresos", lambda *a: Decimal("0.00"))
     run_backup = MagicMock()
@@ -33,7 +35,11 @@ def env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     export = MagicMock()
     monkeypatch.setattr(backup, "export_ledger", export)
     return SimpleNamespace(
-        state=state, telegram=telegram, backup=run_backup, export=export
+        state=state,
+        telegram=telegram,
+        backup=run_backup,
+        export=export,
+        encolar=encolar,
     )
 
 
@@ -45,12 +51,14 @@ def test_unknown_job() -> None:
 def test_digest_sends_nothing_when_empty(env: SimpleNamespace) -> None:
     jobs.run_job("digest")
     env.telegram.send_message.assert_not_called()
+    # Still enqueues the reminders that entered Cloud Tasks' 30-day horizon.
+    assert env.encolar.call_args.args[0].chat_id == "42"
 
 
 def test_digest_agenda_and_yesterday(
     env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(calendar, "agenda", lambda ctx, rango: ["29/09 09:00 X [e1]"])
+    monkeypatch.setattr(agenda, "agenda", lambda ctx, rango: ["29/09 09:00 X [e1]"])
     monkeypatch.setattr(
         ledger, "gastos_por_categoria", lambda *a: {"otros": Decimal("4.50")}
     )
@@ -133,7 +141,7 @@ def test_digest_exports_before_messages_and_survives_failure(
     order: list[str] = []
     env.export.side_effect = lambda s: order.append("export")
     env.telegram.send_message.side_effect = lambda *a: order.append("send")
-    monkeypatch.setattr(calendar, "agenda", lambda ctx, rango: ["x"])
+    monkeypatch.setattr(agenda, "agenda", lambda ctx, rango: ["x"])
     jobs.run_job("digest")
     assert order == ["export", "send"]
     env.export.side_effect = RuntimeError("gcs down")
@@ -156,10 +164,12 @@ def test_backup_writes_json_objects(
     db.collection_group.return_value.stream.return_value = [mov]
     monkeypatch.setattr(backup.firestore, "Client", lambda project: db)
     backup.run(SETTINGS)
-    db.collection_group.assert_called_once_with("movimientos")
+    groups = [c.args[0] for c in db.collection_group.call_args_list]
+    assert groups == ["movimientos", "eventos"]
     root, dia, _ = next(iter(gcs.uploads)).split("/", 2)
     assert root == "backup" and len(dia) == 10 and dia[4] == "-"  # YYYY-MM-DD
     assert sorted(n.split("/", 2)[2] for n in gcs.uploads) == [
+        "firestore/agenda.json",
         "firestore/invites.json",
         "firestore/ledger.json",
         "firestore/pending.json",
@@ -173,7 +183,7 @@ def test_backup_writes_json_objects(
         "ledger/42/movimientos/100-0": {"monto": "2.00", "tipo_mov": "gasto"}
     }
     backup.run(SETTINGS)  # a Pub/Sub retry the same day: create-only, no error
-    assert len(gcs.uploads) == 5
+    assert len(gcs.uploads) == 6
 
 
 def test_backup_skipped_without_bucket(monkeypatch: pytest.MonkeyPatch) -> None:

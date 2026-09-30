@@ -181,3 +181,24 @@ def test_history_keeps_last_turns(db) -> None:
     history = state.get_history("1")
     assert len(history) == 12
     assert history[0]["content"] == "2"
+
+
+def test_ics_token_created_reused_and_rotated(db) -> None:
+    assert state.chat_for_ics_token("x" * 32) is None
+    token = state.ics_token("1")
+    assert len(token) == 32 and state.ics_token("1") == token
+    assert state.chat_for_ics_token(token) == "1"
+    nuevo = state.ics_token("1", rotate=True)
+    assert nuevo != token
+    assert state.chat_for_ics_token(token) is None  # old link revoked
+    assert state.chat_for_ics_token(nuevo) == "1"
+    assert state.get_user("1")["ics_token"] == nuevo
+
+
+def test_ics_token_format_checked_before_lookup(monkeypatch) -> None:
+    def boom():
+        raise AssertionError("no Firestore lookup")
+
+    monkeypatch.setattr(state, "_db", boom)
+    for bad in ("", "short", "a" * 31 + "/", "../users/1" + "a" * 22, "a" * 33):
+        assert state.chat_for_ics_token(bad) is None

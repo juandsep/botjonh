@@ -1,7 +1,8 @@
 """GCS copies of the data in ``$BACKUP_BUCKET``.
 
 - ``run``: weekly JSON backup to ``backup/YYYY-MM-DD/``: the Firestore
-  collections plus every ledger ``movimientos`` subcollection (collection group).
+  collections plus every ledger ``movimientos`` and agenda ``eventos``
+  subcollection (collection groups).
   A 90-day lifecycle rule on ``backup/`` bounds it.
 - ``export_ledger``: daily CSV of yesterday's ledger writes (all chats) to
   ``ledger/mes=YYYY-MM/YYYY-MM-DD.csv``, kept forever for the BigQuery external
@@ -54,6 +55,9 @@ def run(settings: WorkerSettings) -> None:
     objetos["firestore/ledger.json"] = {
         d.reference.path: d.to_dict()
         for d in db.collection_group("movimientos").stream()
+    }
+    objetos["firestore/agenda.json"] = {
+        d.reference.path: d.to_dict() for d in db.collection_group("eventos").stream()
     }
     bucket = _bucket(settings)
     for nombre, data in objetos.items():

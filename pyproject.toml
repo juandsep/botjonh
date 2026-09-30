@@ -1,7 +1,7 @@
 [project]
 name = "botjonh"
 version = "0.1.0"
-description = "Telegram personal assistant: expense tracking, budget advice and calendar reminders on GCP"
+description = "Telegram personal assistant: expense tracking, budget advice and an agenda with exact reminders on GCP"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -12,7 +12,7 @@ dependencies = [
     "google-cloud-firestore>=2.15.0",
     "google-cloud-pubsub>=2.19.0",
     "google-cloud-storage>=2.14.0",
-    "google-api-python-client>=2.120.0",
+    "google-cloud-tasks>=2.16.0",
     "google-auth>=2.27.0",
     "mlflow-skinny>=2.10.0",
 ]
