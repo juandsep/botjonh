@@ -11,6 +11,8 @@ Collections (Firestore native):
 - ``pending/{token}``: chat_id, action, ``expire_at`` (10 min).
 - ``history/{chat_id}``: last turns, each ``{"messages": [...]}`` (Firestore has
   no nested arrays).
+- ``ics_tokens/{token}``: chat_id of a private ICS feed; ``users.ics_token``
+  points back so the link can be shown again or rotated. Never log tokens.
 
 Set a Firestore TTL policy on ``expire_at`` for processed, invites, rate, spend
 and pending. Doc ids contain chat_ids: never log them.
@@ -35,6 +37,7 @@ PENDING_TTL = timedelta(minutes=10)
 INVITE_TTL = timedelta(hours=24)
 PROCESSED_TTL = timedelta(days=7)
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{22}")  # secrets.token_urlsafe(16)
+_ICS_TOKEN = re.compile(r"[A-Za-z0-9_-]{32}")  # secrets.token_urlsafe(24)
 
 
 @cache
@@ -217,6 +220,30 @@ def append_history(chat_id: str, messages: list[dict]) -> None:
     turns = (_data(ref.get()) or {}).get("turns", [])
     turns = [*turns, {"messages": messages}][-HISTORY_TURNS:]
     ref.set({"turns": turns})
+
+
+# --- ICS feed tokens ------------------------------------------------------------
+
+
+def ics_token(chat_id: str, rotate: bool = False) -> str:
+    """The chat's feed token, created if missing; rotate revokes the old one."""
+    user = _doc("users", chat_id)
+    actual = (_data(user.get()) or {}).get("ics_token")
+    if actual and not rotate:
+        return str(actual)
+    if actual:
+        _doc("ics_tokens", actual).delete()
+    token = secrets.token_urlsafe(24)
+    _doc("ics_tokens", token).set({"chat_id": chat_id})
+    user.set({"ics_token": token}, merge=True)
+    return token
+
+
+def chat_for_ics_token(token: str) -> str | None:
+    """Owner chat of a feed token. The format is checked before any lookup."""
+    if not _ICS_TOKEN.fullmatch(token):
+        return None
+    return (_data(_doc("ics_tokens", token).get()) or {}).get("chat_id")
 
 
 # --- owner tools -----------------------------------------------------------------

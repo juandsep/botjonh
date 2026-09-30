@@ -1,4 +1,4 @@
-"""Jobs: digest (07:30, ledger CSV), checkin (21:00), weekly (Sunday, backup).
+"""Jobs: digest (07:30: ledger CSV, reminders), checkin (21:00), weekly (backup).
 
 The assistant is concise: a job messages a chat only when there is something to
 say. One failing chat never stops the others.
@@ -19,13 +19,14 @@ from assistant.channels.telegram import Telegram
 from assistant.config import get_worker_settings
 from assistant.context import ToolContext
 from assistant.jobs import backup
-from assistant.services import budgets, calendar, ledger
+from assistant.services import agenda, budgets, ledger
 
 log = logging.getLogger(__name__)
 
 
 def _digest(ctx: ToolContext) -> str | None:
-    lineas = calendar.agenda(ctx, "hoy")
+    agenda.encolar_recordatorios(ctx)
+    lineas = agenda.agenda(ctx, "hoy")
     ayer = ledger.hoy(ctx) - timedelta(days=1)
     gastado = sum(ledger.gastos_por_categoria(ctx.chat_id, ayer, ayer).values())
     if gastado:

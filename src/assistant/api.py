@@ -4,6 +4,9 @@ Verifies the secret token and the secret route before parsing, checks the
 allowlist, deduplicates by update_id and publishes to Pub/Sub. Returns 2xx fast;
 never calls the LLM. The only state it writes is the dedup marker and, for
 ``/start <code>`` from an unknown chat, the invite redemption.
+
+Also serves each chat's agenda as a private ICS feed at ``/ics/{token}.ics``
+(read-only; the token is the only secret, so it is never logged).
 """
 
 from __future__ import annotations
@@ -11,6 +14,7 @@ from __future__ import annotations
 import hmac
 import json
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import FastAPI, Request, Response
@@ -18,7 +22,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from assistant.channels.telegram import parse_update
 from assistant.config import get_api_settings
-from assistant.services import pubsub, state
+from assistant.services import agenda, pubsub, state
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="assistant-api")
@@ -27,6 +31,21 @@ app = FastAPI(title="assistant-api")
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/ics/{token}.ics")
+def ics_feed(token: str) -> Response:
+    chat_id = state.chat_for_ics_token(token)  # checks the format first
+    if chat_id is None:
+        logger.info("ics status=404")
+        return Response(status_code=404)
+    body = agenda.ics(chat_id, datetime.now(UTC))
+    logger.info("ics status=200")
+    return Response(
+        body,
+        media_type="text/calendar; charset=utf-8",
+        headers={"Cache-Control": "private, max-age=300"},
+    )
 
 
 @app.post("/tg/{path}")

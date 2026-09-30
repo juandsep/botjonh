@@ -85,7 +85,7 @@ jobs:
             --min-instances=0
             --max-instances=2
             --allow-unauthenticated
-            --command=uvicorn,assistant.api:app,--host,0.0.0.0,--port,8080
+            --command=uvicorn,assistant.api:app,--host,0.0.0.0,--port,8080,--no-access-log
           env_vars: |
             GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
           secrets: |
@@ -109,7 +109,11 @@ jobs:
             GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
             BACKUP_BUCKET=${{ vars.BACKUP_BUCKET }}
             MLFLOW_TRACKING_URI=${{ vars.MLFLOW_TRACKING_URI }}
-            CALENDAR_ID=${{ vars.CALENDAR_ID }}
+            WORKER_URL=${{ vars.WORKER_URL }}
+            WORKER_SA=${{ vars.GCP_WORKER_SA }}
+            TASKS_QUEUE=assistant-reminders
+            TASKS_LOCATION=${{ vars.GCP_REGION }}
+            API_URL=${{ vars.API_URL }}
           secrets: |
             TELEGRAM_BOT_TOKEN=assistant-bot-token:latest
             DEEPSEEK_API_KEY=assistant-deepseek-key:latest

@@ -1,4 +1,5 @@
 import base64
+import dataclasses
 import importlib
 import json
 import sys
@@ -13,7 +14,8 @@ from fastapi.testclient import TestClient
 
 from assistant import worker
 from assistant.channels.telegram import API_BASE
-from assistant.services import state
+from assistant.config import get_worker_settings
+from assistant.services import agenda, state
 
 TG = f"{API_BASE}/bot123:test"
 client = TestClient(worker.app)
@@ -209,8 +211,113 @@ def test_callback_unknown_action(st, tg) -> None:
 
 
 def test_unexpected_turn_error_is_acknowledged(st, llm, tg) -> None:
-    # A retry would pay for the turn again and could repeat a calendar write.
+    # A retry would pay for the turn again and could repeat a write.
     llm.run_turn.side_effect = RuntimeError("sheets down")
     assert client.post("/push", json=envelope(message())).status_code == 204
     assert sent_texts(tg) == [worker.FAILED_REPLY]
     st.add_llm_spend.assert_not_called()
+
+
+# --- commands without the LLM ----------------------------------------------------
+
+
+@pytest.fixture
+def settings(monkeypatch):
+    s = dataclasses.replace(get_worker_settings(), api_url="https://api.example")
+    monkeypatch.setattr(worker, "get_worker_settings", lambda: s)
+    return s
+
+
+def test_calendario_lists_week_without_llm(monkeypatch, st, llm, tg) -> None:
+    semana = MagicMock(return_value="Jue 1 · 09:00 Dentista")
+    monkeypatch.setattr(agenda, "semana", semana)
+    assert (
+        client.post("/push", json=envelope(message("/calendario"))).status_code == 204
+    )
+    semana.return_value = "Sin nada en 7 días."
+    client.post("/push", json=envelope(message("/calendario@botjonh_bot")))
+    assert sent_texts(tg) == ["Jue 1 · 09:00 Dentista", "Sin nada en 7 días."]
+    assert semana.call_args.args[0].chat_id == "42"
+    llm.run_turn.assert_not_called()
+    st.check_rate.assert_not_called()
+
+
+def test_calendario_enlace_and_rotation(monkeypatch, st, llm, tg, settings) -> None:
+    tokens = iter(["a" * 32, "b" * 32])
+    current: list[str] = []
+
+    def ics_token(chat_id, rotate=False):
+        if rotate or not current:
+            current[:] = [next(tokens)]
+        return current[0]
+
+    monkeypatch.setattr(state, "ics_token", ics_token)
+    for text in ("/calendario enlace", "/calendario enlace", "/calendario nuevo"):
+        client.post("/push", json=envelope(message(text)))
+    links = [t.splitlines()[0] for t in sent_texts(tg)]
+    assert links == [
+        f"https://api.example/ics/{'a' * 32}.ics",
+        f"https://api.example/ics/{'a' * 32}.ics",
+        f"https://api.example/ics/{'b' * 32}.ics",
+    ]
+    assert sent_texts(tg)[0].splitlines()[1] == worker.GOOGLE_HINT
+    llm.run_turn.assert_not_called()
+
+
+def test_calendario_enlace_unconfigured_and_errors(monkeypatch, st, llm, tg) -> None:
+    unset = dataclasses.replace(get_worker_settings(), api_url="")
+    monkeypatch.setattr(worker, "get_worker_settings", lambda: unset)
+    client.post("/push", json=envelope(message("/calendario enlace")))
+    monkeypatch.setattr(agenda, "semana", MagicMock(side_effect=RuntimeError("x")))
+    client.post("/push", json=envelope(message("/calendario")))
+    assert sent_texts(tg) == ["Enlace no configurado.", worker.FAILED_REPLY]
+
+
+def test_conectar(monkeypatch, st, llm, tg) -> None:
+    monkeypatch.setitem(sys.modules, "assistant.services.busy", None)  # not shipped
+    client.post("/push", json=envelope(message("/conectar https://x/a.ics")))
+    client.post("/push", json=envelope(message("/conectar")))
+    conectar = MagicMock(return_value="✓ calendario conectado")
+    monkeypatch.setitem(
+        sys.modules,
+        "assistant.services.busy",
+        types.SimpleNamespace(conectar=conectar),
+    )
+    client.post("/push", json=envelope(message("/conectar https://x/a.ics")))
+    assert sent_texts(tg) == [
+        "Aún no disponible.",
+        "Uso: /conectar <url del calendario .ics>",
+        "✓ calendario conectado",
+    ]
+    assert conectar.call_args.args[1] == "https://x/a.ics"
+    llm.run_turn.assert_not_called()
+
+
+# --- reminders from Cloud Tasks --------------------------------------------------
+
+
+def test_reminder_sends_for_active(monkeypatch, tg) -> None:
+    aviso = MagicMock(return_value="⏰ Dentista 09:00")
+    monkeypatch.setattr(agenda, "aviso", aviso)
+    body = {"chat_id": "42", "evento_id": "100"}
+    assert client.post("/tasks/reminder", json=body).status_code == 204
+    aviso.assert_called_once_with("42", "100")
+    assert sent_texts(tg) == ["⏰ Dentista 09:00"]
+    assert json.loads(tg.calls.last.request.read())["chat_id"] == "42"
+
+
+def test_reminder_cancelled_or_malformed_is_204(monkeypatch, tg) -> None:
+    monkeypatch.setattr(agenda, "aviso", MagicMock(return_value=None))
+    body = {"chat_id": "42", "evento_id": "100"}
+    assert client.post("/tasks/reminder", json=body).status_code == 204
+    assert client.post("/tasks/reminder", content=b"{").status_code == 204
+    assert client.post("/tasks/reminder", json={"x": 1}).status_code == 204
+    assert not tg.calls
+
+
+def test_reminder_telegram_error_is_not_5xx(monkeypatch, tg, caplog) -> None:
+    monkeypatch.setattr(agenda, "aviso", MagicMock(return_value="⏰ X 09:00"))
+    tg.post(f"{TG}/sendMessage").mock(return_value=httpx.Response(500))
+    body = {"chat_id": "42", "evento_id": "100"}
+    assert client.post("/tasks/reminder", json=body).status_code == 204
+    assert "reminder_send_failed" in caplog.text and "X 09:00" not in caplog.text

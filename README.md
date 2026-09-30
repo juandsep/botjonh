@@ -1,16 +1,19 @@
 # botjonh
 
 A single-user Telegram bot that is a finance advisor and a calendar: it logs
-expenses and income to a Firestore ledger, recommends budgets to save, schedules
-appointments (medical, personal) on a dedicated Google Calendar, and sends
-proactive reminders. It runs for one owner plus a small allowlist of beta
+expenses and income to a Firestore ledger, recommends budgets to save, keeps its
+own agenda of appointments (medical, personal) that you subscribe to from
+Google, Apple or Outlook as a private ICS feed, and sends exact-time reminders
+on Telegram. It runs for one owner plus a small allowlist of beta
 testers, on GCP for about $1–2/month (LLM tokens only).
 
 - **Channel:** Telegram Bot API (webhook → Cloud Run).
 - **LLM:** DeepSeek `deepseek-flash` over its HTTP API (tool calling,
   automatic prefix cache). Minimal context is sent: never the full ledger.
-- **State:** Firestore (users, idempotency, preferences, budgets, and the
-  append-only finance ledger).
+- **State:** Firestore (users, idempotency, preferences, budgets, the
+  append-only finance ledger and the agenda).
+- **Reminders:** Cloud Tasks, one task per reminder, POSTed to the worker at
+  the exact time.
 - **Reporting:** the ledger is exported daily as CSV to GCS; a BigQuery external
   table over those files feeds a Looker Studio dashboard, at about $0.
 - **Observability:** the shared MLflow server in `jd-portfolio-shared`
@@ -21,8 +24,9 @@ testers, on GCP for about $1–2/month (LLM tokens only).
 ```
 Telegram ──webhook──▶ assistant-api (Cloud Run) ──▶ Pub/Sub assistant-updates ──▶ assistant-worker (Cloud Run)
 Cloud Scheduler ─────────────────────────────────▶ Pub/Sub assistant-cron ───────▶ assistant-worker
-                                                                                         │
-                                            DeepSeek · Firestore · Calendar · MLflow
+Cloud Tasks assistant-reminders ─────────────────────────────── /tasks/reminder ──▶ assistant-worker
+Google/Apple/Outlook ──GET /ics/{token}.ics──▶ assistant-api                             │
+                                                                   DeepSeek · Firestore · MLflow
 ```
 
 Two Cloud Run services on purpose: Cloud Run does not guarantee CPU between
@@ -35,8 +39,8 @@ See [PLAN.md](PLAN.md) (Spanish) for the full plan, costs and roadmap.
 ## Stack
 
 FastAPI, httpx (DeepSeek, Telegram), `google-cloud-*` (Firestore, Pub/Sub,
-Storage), `google-api-python-client` (Calendar), `mlflow-skinny`, uv + ruff + mypy
-+ pytest, Terraform, GitHub Actions.
+Storage, Tasks), `mlflow-skinny`, uv + ruff + mypy + pytest, Terraform, GitHub
+Actions. The ICS feed is written by hand (no calendar library).
 
 ## Run locally
 
@@ -76,13 +80,19 @@ see [Configuration](#configuration).
    read -rs KEY   && printf '%s' "$KEY"  | gcloud secrets versions add assistant-deepseek-key --data-file=-
    ```
 
-3. Share one dedicated calendar with the `assistant-worker` service account,
-   then add its id as the `CALENDAR_ID` repository variable.
-
-4. Configure GitHub: set the values from `terraform output github_variables`
+3. Configure GitHub: set the values from `terraform output github_variables`
    plus the environment-specific variables, then create the `staging`
-   (branch `dev`) and `production` (branch `main`)
-   environments.
+   (branch `dev`) and `production` (branch `main`) environments. After the
+   first deploy, set per environment `WORKER_URL` (the worker's Cloud Run URL;
+   reminders are skipped while it is empty) and `API_URL` (the api's URL, for
+   the ICS link), then deploy again.
+
+4. In @BotFather, `/setcommands` for the bot and paste:
+
+   ```
+   calendario - Próximos 7 días (enlace: suscribirse, nuevo: cambiar enlace)
+   conectar - Conectar un calendario externo (.ics) para ver ocupado
+   ```
 
 5. Add yourself as the owner (your chat id from @userinfobot), with ADC
    pointed at the project. Owners invite beta users from the chat; a beta joins
@@ -143,6 +153,43 @@ Terraform creates the BigQuery external table `botjonh.ledger` over those files
    trend (time series, `fecha` by month, SUM `monto`); spend by `categoria`
    (bar); 50/30/20 split by `bucket` (pie) next to income (`tipo_mov = ingreso`).
 
+## Agenda
+
+The bot keeps its own agenda in Firestore:
+`agenda/{chat_id}/eventos/{evento_id}` with `titulo`, `inicio`/`fin` (ISO with
+the user's offset, plus `inicio_utc`/`fin_utc` for range queries), `ubicacion`,
+`recordatorio_min`, `tipo` (`evento`|`recordatorio`), `estado`
+(`activo`|`cancelado`) and `creado`. The id is the Telegram `update_id`, so a
+retry never duplicates; cancelling only flips `estado`.
+
+- **Conflicts:** before scheduling, the code checks the agenda and the busy
+  blocks of a connected calendar (`/conectar <url>`); on a clash it asks
+  "Choca con … ¿Agendo igual?" with buttons. "¿Qué tengo libre el jueves?"
+  lists free slots between 08:00 and 20:00.
+- **`/calendario`** lists the next 7 days, one line per day, without calling
+  the LLM: `Jue 2 · 09:00 Dentista · 16:00 Llamada banco`.
+- **Reminders** are Cloud Tasks at the exact time (`inicio - recordatorio_min`,
+  or `cuando` for a recordatorio), so Telegram pings you on the minute. Cloud
+  Tasks schedules at most 30 days ahead; later reminders are enqueued by the
+  morning digest once they are within 30 days. Cancelling deletes the task.
+
+### Subscribe from your calendar app
+
+`/calendario enlace` replies with your private URL
+(`$API_URL/ics/<token>.ics`); anyone with it can read your agenda, so
+`/calendario nuevo` replaces it and revokes the old one.
+
+- **Google Calendar (web):** Other calendars → **+** → **From URL** → paste the
+  link → **Add calendar**.
+- **Apple Calendar:** iPhone: Settings → Calendar → Accounts → Add Account →
+  Other → Add Subscribed Calendar. Mac: File → New Calendar Subscription.
+- **Outlook:** Add calendar → Subscribe from web → paste the link → Import.
+
+Subscriptions are read-only and refreshed by the app, not pushed: Google
+refreshes every ~8–24 h (Apple and Outlook let you pick an interval), so a new
+appointment may take hours to show there. The Telegram reminder does not
+depend on that refresh and arrives at the exact time.
+
 ## Configuration
 
 All secrets come from Secret Manager; settings from environment variables.
@@ -154,7 +201,11 @@ All secrets come from Secret Manager; settings from environment variables.
 | `WEBHOOK_SECRET_TOKEN` | Secret `assistant-webhook-secret` (X-Telegram-Bot-Api-Secret-Token) |
 | `WEBHOOK_PATH` | Secret `assistant-webhook-path` (webhook route) |
 | `DEEPSEEK_API_KEY` | Secret `assistant-deepseek-key` |
-| `CALENDAR_ID` | Dedicated calendar |
+| `WORKER_URL` | Worker Cloud Run URL, target of the reminder tasks (per environment; empty = no reminders) |
+| `WORKER_SA` | Worker service account, signs the reminder tasks' OIDC token (`GCP_WORKER_SA`) |
+| `TASKS_QUEUE` | Cloud Tasks queue, default `assistant-reminders` |
+| `TASKS_LOCATION` | Queue region, default `us-central1` |
+| `API_URL` | Public api URL, for the ICS subscription link (per environment) |
 | `MLFLOW_TRACKING_URI` | Shared MLflow server |
 | `LLM_MODEL` | Default `deepseek-flash` |
 | `BACKUP_BUCKET` | Weekly JSON backup and daily ledger CSV (from `terraform output`) |

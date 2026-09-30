@@ -1,8 +1,9 @@
 """Worker entrypoint (assistant-worker).
 
 Push subscriber for assistant-updates (user messages) and assistant-cron
-(scheduled jobs). Cloud Run validates the Pub/Sub OIDC token before the request
-reaches this route, so no unauthenticated caller gets here.
+(scheduled jobs), and target of the Cloud Tasks reminders. The service is
+private: Cloud Run validates the OIDC token (Pub/Sub, Cloud Tasks) before a
+request reaches these routes, so no unauthenticated caller gets here.
 
 Any 2xx acks the message; a 5xx makes Pub/Sub retry with backoff.
 """
@@ -11,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import importlib
 import json
 import logging
 import time
@@ -26,7 +28,7 @@ from assistant.channels.base import InboundMessage
 from assistant.channels.telegram import Telegram, parse_update
 from assistant.config import WorkerSettings, get_worker_settings
 from assistant.context import ToolContext
-from assistant.services import state
+from assistant.services import agenda, state
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="assistant-worker")
@@ -36,6 +38,7 @@ LIMIT_REPLY = "Llegaste al límite por ahora. Intenta más tarde."
 WELCOME = "Hola. Escríbeme gastos, ingresos o citas y yo los registro."
 TEXT_ONLY = "Por ahora solo entiendo texto."
 FAILED_REPLY = "No pude hacerlo, intenta de nuevo."
+GOOGLE_HINT = "Google Calendar: Otros calendarios → + → Desde URL, y pega el enlace."
 
 
 @app.get("/health")
@@ -53,6 +56,31 @@ async def push(request: Request) -> Response:
         logger.warning("malformed_envelope")
         return Response(status_code=ACK)
     return Response(status_code=await run_in_threadpool(_route, payload))
+
+
+@app.post("/tasks/reminder")
+async def reminder(request: Request) -> Response:
+    """Cloud Tasks at the reminder time. Always 2xx unless Firestore fails."""
+    try:
+        body = json.loads(await request.body())
+        chat_id, evento_id = str(body["chat_id"]), str(body["evento_id"])
+    except (ValueError, KeyError, TypeError):
+        logger.warning("malformed_task")
+        return Response(status_code=ACK)
+    await run_in_threadpool(_remind, chat_id, evento_id)
+    return Response(status_code=ACK)
+
+
+def _remind(chat_id: str, evento_id: str) -> None:
+    texto = agenda.aviso(chat_id, evento_id)
+    if texto is None:  # cancelled or missing
+        return
+    try:
+        Telegram(get_worker_settings().telegram_bot_token).send_message(chat_id, texto)
+    except httpx.HTTPError:
+        logger.warning("reminder_send_failed")
+        return
+    logger.info("reminder_sent")
 
 
 def _route(payload: Any) -> int:
@@ -94,6 +122,9 @@ def handle_update(msg: InboundMessage, settings: WorkerSettings) -> int:
     if not msg.text.strip():
         _send(channel, msg, TEXT_ONLY)
         return ACK
+    if msg.text.startswith(("/calendario", "/conectar")):
+        _send(channel, msg, _command(ctx, msg, settings))
+        return ACK
 
     # 1. Rate limit and daily cap: fail closed without calling the LLM.
     if not state.check_rate(msg.chat_id, settings.max_msgs_per_minute) or (
@@ -114,7 +145,7 @@ def handle_update(msg: InboundMessage, settings: WorkerSettings) -> int:
         return 503
     except Exception as exc:
         # Any other failure is acknowledged: a Pub/Sub retry would pay for the
-        # turn again and could repeat a non-idempotent write (calendar).
+        # turn again and could repeat a non-idempotent write.
         logger.error(
             "turn_failed update_id=%s error=%s", msg.update_id, type(exc).__name__
         )
@@ -129,6 +160,32 @@ def handle_update(msg: InboundMessage, settings: WorkerSettings) -> int:
 
     trace.record_turn(result, int((time.monotonic() - started) * 1000), msg.text)
     return ACK
+
+
+def _command(ctx: ToolContext, msg: InboundMessage, settings: WorkerSettings) -> str:
+    """/calendario [enlace|nuevo] and /conectar <url>, without the LLM."""
+    cmd, _, arg = msg.text.strip().partition(" ")
+    cmd, arg = cmd.split("@")[0], arg.strip()
+    try:
+        if cmd == "/conectar":
+            if not arg:
+                return "Uso: /conectar <url del calendario .ics>"
+            try:
+                busy = importlib.import_module("assistant.services.busy")
+            except ImportError:
+                return "Aún no disponible."
+            return str(busy.conectar(ctx, arg))
+        if arg in ("enlace", "nuevo"):
+            if not settings.api_url:
+                return "Enlace no configurado."
+            token = state.ics_token(ctx.chat_id, rotate=arg == "nuevo")
+            return f"{settings.api_url}/ics/{token}.ics\n{GOOGLE_HINT}"
+        return agenda.semana(ctx)
+    except Exception as exc:
+        logger.error(
+            "command_failed update_id=%s error=%s", msg.update_id, type(exc).__name__
+        )
+        return FAILED_REPLY
 
 
 def _send(

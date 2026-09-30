@@ -1,6 +1,6 @@
 # Base GCP resources for the Telegram assistant: APIs, Firestore, artifact
 # registry, secrets, service accounts, Workload Identity Federation, Pub/Sub
-# topics, Cloud Scheduler jobs and a budget guard. The Cloud Run services
+# topics, Cloud Scheduler jobs, the Cloud Tasks reminder queue and a budget guard. The Cloud Run services
 # (assistant-api, assistant-worker) are deployed by GitHub Actions, not here;
 # their push subscription is gated on worker_url (set it after the first deploy).
 # State is local (terraform.tfstate, git-ignored).
@@ -76,11 +76,11 @@ resource "google_project_service" "apis" {
     "cloudbuild.googleapis.com",
     "cloudresourcemanager.googleapis.com",
     "cloudscheduler.googleapis.com",
+    "cloudtasks.googleapis.com",
     "firestore.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
     "pubsub.googleapis.com",
-    "calendar-json.googleapis.com",
     "run.googleapis.com",
     "secretmanager.googleapis.com",
     "storage.googleapis.com",
@@ -367,6 +367,43 @@ resource "google_pubsub_subscription" "cron_push" {
       service_account_email = google_service_account.sa["worker"].email
     }
   }
+}
+
+# Reminders: the worker enqueues one task per reminder (deterministic name) that
+# POSTs to {worker_url}/tasks/reminder at the exact time, with an OIDC token for
+# the worker account (already run.invoker). One queue serves staging and prod:
+# each task carries its full target URL.
+resource "google_cloud_tasks_queue" "reminders" {
+  name       = "assistant-reminders"
+  location   = var.region
+  depends_on = [google_project_service.apis]
+
+  rate_limits {
+    max_dispatches_per_second = 1
+    max_concurrent_dispatches = 2
+  }
+  retry_config {
+    max_attempts  = 5
+    min_backoff   = "10s"
+    max_backoff   = "300s"
+    max_doublings = 3
+  }
+}
+
+resource "google_cloud_tasks_queue_iam_member" "worker_tasks" {
+  for_each = toset(["roles/cloudtasks.enqueuer", "roles/cloudtasks.taskDeleter"])
+  name     = google_cloud_tasks_queue.reminders.name
+  location = google_cloud_tasks_queue.reminders.location
+  role     = each.value
+  member   = google_service_account.sa["worker"].member
+}
+
+# Creating a task with an OIDC token for an account needs actAs on it: the
+# worker signs its reminder tasks as itself.
+resource "google_service_account_iam_member" "worker_acts_as_itself" {
+  service_account_id = google_service_account.sa["worker"].name
+  role               = "roles/iam.serviceAccountUser"
+  member             = google_service_account.sa["worker"].member
 }
 
 # Cloud Scheduler publishes directly to the cron topic (no HTTP endpoints).
