@@ -54,6 +54,9 @@ uvx detect-secrets audit .secrets.baseline
 ```
 
 CI runs the same `detect-secrets` hook plus gitleaks over the pushed commits.
+CI also fails under 80% test coverage, writes the coverage table to the job
+summary and, when the `SONAR_TOKEN` secret is set, sends the analysis and
+`coverage.xml` to SonarQube Cloud (`sonar-project.properties`).
 Dependabot opens weekly update PRs into `dev` for uv, GitHub Actions and Docker.
 
 If a real secret ever reaches a commit, treat it as compromised: rotate it

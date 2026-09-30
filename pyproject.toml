@@ -54,6 +54,8 @@ testpaths = ["tests"]
 [tool.coverage.run]
 source = ["src/assistant"]
 branch = true
+# Relative paths in coverage.xml so SonarQube maps them to the repository.
+relative_files = true
 
 [tool.coverage.report]
 show_missing = true
