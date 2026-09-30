@@ -1,10 +1,11 @@
 """Read-only busy times from the user's own calendar via its secret iCal URL.
 
-``preferences/{chat_id}.ics_url`` holds the "secret address in iCal format" of
-a Google, iCloud or Outlook calendar. No OAuth: the URL itself grants read
-access, so it is a secret. Never log it or any part of it; it lives only in
-Firestore. External event titles are never returned, logged or stored: every
-block is labelled "Ocupado".
+``preferences/{chat_id}.ics_url_enc`` holds the "secret address in iCal
+format" of a Google, iCloud or Outlook calendar, encrypted with Cloud KMS
+(``services/crypto.py``). No OAuth: the URL itself grants read access, so it is
+a secret. Never log it or any part of it, and never store it in clear.
+External event titles are never returned, logged or stored: every block is
+labelled "Ocupado".
 
 SSRF: the URL is user-supplied, so only https (webcal is rewritten) to an
 allowlisted host, port 443, no userinfo, no IP literals, no redirects, 5 s
@@ -30,7 +31,9 @@ import icalendar
 import recurring_ical_events
 from google.cloud import firestore
 
+from assistant.config import get_worker_settings
 from assistant.context import ToolContext
+from assistant.services import crypto
 
 log = logging.getLogger(__name__)
 # httpx logs every request URL at INFO; that URL is the secret. Silence it.
@@ -152,18 +155,19 @@ def ocupados(
 ) -> list[tuple[datetime, datetime, str]]:
     """Busy blocks overlapping [desde, hasta), UTC. [] if none, unset or failing."""
     try:
-        raw = _state().get_preferences(chat_id).get("ics_url")
-        if not raw:
+        enc = _state().get_preferences(chat_id).get("ics_url_enc")
+        if not enc:
             return []
         user = _state().get_user(chat_id) or {}
         zone = ZoneInfo(user.get("zona_horaria") or DEFAULT_ZONE)
         now = time.monotonic()
         hit = _cache.get(chat_id)
-        if hit and hit[1] == raw and now - hit[0] < CACHE_TTL_S:
+        if hit and hit[1] == enc and now - hit[0] < CACHE_TTL_S:
             cal = hit[2]
         else:
-            cal = _load(raw)
-            _cache[chat_id] = (now, raw, cal)
+            key = get_worker_settings().kms_key
+            cal = _load(crypto.decrypt(key, enc, chat_id))
+            _cache[chat_id] = (now, enc, cal)
         return _blocks(cal, desde, hasta, zone)
     except BusyError as exc:
         log.error("ics_busy_failed code=%s", exc)
@@ -177,14 +181,22 @@ def conectar(ctx: ToolContext, url: str) -> str:
     ref = _db().collection("preferences").document(ctx.chat_id)
     _cache.pop(ctx.chat_id, None)
     if url.strip().lower() == "off":
-        ref.set({"ics_url": firestore.DELETE_FIELD}, merge=True)
+        ref.set(
+            {"ics_url": firestore.DELETE_FIELD, "ics_url_enc": firestore.DELETE_FIELD},
+            merge=True,
+        )
         log.info("ics_disconnect")
         return "Calendario desconectado."
+    key = get_worker_settings().kms_key
+    if not key:  # fail closed: never store the URL in clear
+        log.warning("ics_connect_rejected code=no_kms_key")
+        return "Aún no disponible."
     try:
         _load(url)
     except BusyError as exc:
         log.info("ics_connect_rejected code=%s", exc)
         return INVALID if str(exc) == "invalid_url" else UNREADABLE
-    ref.set({"ics_url": url.strip()}, merge=True)
+    enc = crypto.encrypt(key, url.strip(), ctx.chat_id)
+    ref.set({"ics_url_enc": enc, "ics_url": firestore.DELETE_FIELD}, merge=True)
     log.info("ics_connect")
     return "✓ Calendario conectado."

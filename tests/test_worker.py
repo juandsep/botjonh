@@ -101,6 +101,9 @@ def tg():
         router.post(f"{TG}/answerCallbackQuery").mock(
             return_value=httpx.Response(200, json={"ok": True})
         )
+        router.post(f"{TG}/deleteMessage").mock(
+            return_value=httpx.Response(200, json={"ok": True})
+        )
         yield router
 
 
@@ -291,6 +294,24 @@ def test_conectar(monkeypatch, st, llm, tg) -> None:
     ]
     assert conectar.call_args.args[1] == "https://x/a.ics"
     llm.run_turn.assert_not_called()
+
+
+def test_conectar_deletes_the_message_with_the_url(monkeypatch, st, llm, tg) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "assistant.services.busy",
+        types.SimpleNamespace(
+            conectar=MagicMock(return_value="✓ Calendario conectado.")
+        ),
+    )
+    update = message("/conectar https://x/a.ics")
+    update["message"]["message_id"] = 77
+    client.post("/push", json=envelope(update))
+    deleted = [c for c in tg.calls if c.request.url.path.endswith("deleteMessage")]
+    assert json.loads(deleted[0].request.read()) == {"chat_id": "42", "message_id": 77}
+    assert sent_texts(tg) == [
+        "✓ Calendario conectado.\nBorré tu mensaje con el enlace."
+    ]
 
 
 # --- reminders from Cloud Tasks --------------------------------------------------
