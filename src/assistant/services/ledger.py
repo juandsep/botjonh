@@ -140,7 +140,7 @@ def _cifra(valor: Decimal) -> str:
     return f"{valor:,.0f}" if valor == valor.to_integral() else f"{valor:,.2f}"
 
 
-def _texto(d: dict, sep: str = " · ") -> str:
+def texto(d: dict, sep: str = " · ") -> str:
     """One movement as "−0.49 USD · café (2,000 COP)"; a reverso as its registro."""
     signo = "−" if d["tipo_mov"] == "gasto" else "+"
     texto = f"{signo}{abs(q(d['monto']))} USD"
@@ -175,7 +175,7 @@ def registrar_gasto(
         }
     _crear(ctx.chat_id, docs)
     _state().set_last_batch(ctx.chat_id, batch)
-    return "; ".join(_texto(d) for d in docs.values())
+    return "; ".join(texto(d) for d in docs.values())
 
 
 def registrar_ingreso(
@@ -202,7 +202,7 @@ def registrar_ingreso(
     }
     _crear(ctx.chat_id, {f"{ctx.update_id}-i0": doc})
     _state().set_last_batch(ctx.chat_id, batch)
-    return _texto(doc)
+    return texto(doc)
 
 
 def _reverso(ctx: ToolContext, doc_id: str, d: dict) -> dict:
@@ -278,7 +278,7 @@ def ultimos(ctx: ToolContext, n: int = 5) -> list[dict]:
 
 def ultimos_texto(ctx: ToolContext, n: int = 5) -> str:
     lineas = [
-        f"{m['indice']}) {date.fromisoformat(m['fecha']):%d/%m} {_texto(m, ' ')}"
+        f"{m['indice']}) {date.fromisoformat(m['fecha']):%d/%m} {texto(m, ' ')}"
         for m in ultimos(ctx, n)
     ]
     return "\n".join(lineas) or "Sin movimientos."
@@ -306,7 +306,7 @@ def _elegir(ctx: ToolContext, indice: int) -> tuple[str, dict] | None:
 def anular(ctx: ToolContext, indice: int = 1) -> str:
     previo = _repetido(ctx)
     if previo is not None:
-        return f"✓ anulado: {_texto(previo)}"
+        return f"✓ anulado: {texto(previo)}"
     elegido = _elegir(ctx, indice)
     if elegido is None:
         return NO_ENCONTRADO
@@ -314,7 +314,7 @@ def anular(ctx: ToolContext, indice: int = 1) -> str:
     # Reverso id per registro: two updates can never cancel the same row twice.
     if not _crear(ctx.chat_id, {f"{doc_id}-x": _reverso(ctx, doc_id, d)}):
         return NO_ENCONTRADO
-    return f"✓ anulado: {_texto(d)}"
+    return f"✓ anulado: {texto(d)}"
 
 
 def editar(
@@ -328,7 +328,7 @@ def editar(
     """Reverso of the chosen movement plus a new registro with merged fields."""
     previo = _repetido(ctx)
     if previo is not None:
-        return f"✓ editado: {_texto(previo)}"
+        return f"✓ editado: {texto(previo)}"
     elegido = _elegir(ctx, indice)
     if elegido is None:
         return NO_ENCONTRADO
@@ -354,7 +354,30 @@ def editar(
     docs = {f"{doc_id}-x": _reverso(ctx, doc_id, d), f"{ctx.update_id}-e0": nuevo}
     if not _crear(ctx.chat_id, docs):
         return NO_ENCONTRADO
-    return f"✓ editado: {_texto(nuevo)}"
+    return f"✓ editado: {texto(nuevo)}"
+
+
+def del_dia(chat_id: str, dia: date) -> list[dict]:
+    """Registros of one day still in force (not reversed), oldest first."""
+    fin = (dia + timedelta(days=1)).isoformat()
+    consulta = (
+        _col(chat_id)
+        .where(filter=FieldFilter("fecha", ">=", dia.isoformat()))
+        .where(filter=FieldFilter("fecha", "<", fin))
+    )
+    docs = [(s.id, s.to_dict()) for s in consulta.stream()]
+    reversos = [d for _, d in docs if d.get("tipo") == "reverso"]
+    anulados = {d["reversa"] for d in reversos if d.get("reversa")}
+    # Reversos written before the reversa field cancel their whole batch.
+    lotes = {d["batch_id"] for d in reversos if not d.get("reversa")}
+    vivos = [
+        d
+        for doc_id, d in docs
+        if d.get("tipo") != "reverso"
+        and doc_id not in anulados
+        and d.get("batch_id") not in lotes
+    ]
+    return sorted(vivos, key=lambda d: str(d.get("creado", "")))
 
 
 def gastos_por_categoria(chat_id: str, desde: date, hasta: date) -> dict[str, Decimal]:

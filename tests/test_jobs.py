@@ -30,6 +30,7 @@ def env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     monkeypatch.setattr(agenda, "encolar_recordatorios", encolar)
     monkeypatch.setattr(ledger, "gastos_por_categoria", lambda *a: {})
     monkeypatch.setattr(ledger, "total_ingresos", lambda *a: Decimal("0.00"))
+    monkeypatch.setattr(ledger, "del_dia", lambda *a: [])
     run_backup = MagicMock()
     monkeypatch.setattr(backup, "run", run_backup)
     export = MagicMock()
@@ -68,34 +69,59 @@ def test_digest_agenda_and_yesterday(
     )
 
 
-def test_checkin_only_when_nothing_logged(
+def test_checkin_lists_the_day(
     env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(ledger, "del_dia", lambda *a: [])
     jobs.run_job("checkin")
-    assert env.telegram.send_message.call_count == 1
-    monkeypatch.setattr(ledger, "total_ingresos", lambda *a: Decimal("5.00"))
+    env.telegram.send_message.assert_called_with("42", "Hoy no registraste gastos.")
+    movs = [
+        {
+            "tipo_mov": "gasto",
+            "monto": "0.49",
+            "nota": "café",
+            "moneda_original": "COP",
+            "monto_original": "2000",
+        },
+        {"tipo_mov": "gasto", "monto": "12.00", "nota": "uber"},
+        {"tipo_mov": "ingreso", "monto": "1000.00", "fuente": "salario"},
+    ]
+    monkeypatch.setattr(ledger, "del_dia", lambda *a: movs)
     jobs.run_job("checkin")
-    monkeypatch.setattr(ledger, "gastos_por_categoria", lambda *a: {"otros": 1})
-    jobs.run_job("checkin")
-    assert env.telegram.send_message.call_count == 1
+    assert env.telegram.send_message.call_args.args[1] == (
+        "Hoy (3):\n"
+        "−0.49 USD · café (2,000 COP)\n"
+        "−12.00 USD · uber\n"
+        "+1000.00 USD · salario\n"
+        "Total gastos: 12.49 USD"
+    )
 
 
-def test_weekly_backs_up_and_summarizes(
+def test_weekly_backs_up_and_crosses_with_income(
     env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     jobs.run_job("weekly")
     env.backup.assert_called_once()
-    env.telegram.send_message.assert_not_called()  # no spend, nothing to say
+    env.telegram.send_message.assert_not_called()  # nothing to say
     monkeypatch.setattr(
-        ledger, "gastos_por_categoria", lambda *a: {"restaurantes": Decimal("80.00")}
+        ledger,
+        "gastos_por_categoria",
+        lambda *a: {"restaurantes": Decimal("80.00"), "transporte": Decimal("20.00")},
     )
     jobs.run_job("weekly")
-    env.telegram.send_message.assert_called_with("42", "Semana: 80.00 USD.")
+    lines = env.telegram.send_message.call_args.args[1].splitlines()
+    assert lines[0].startswith("Semana ") and lines[0].endswith(": 100.00 USD")
+    assert lines[1] == "Top: restaurantes 80.00 · transporte 20.00"
+    assert lines[2].startswith("Sin ingresos este mes")
     monkeypatch.setattr(ledger, "total_ingresos", lambda *a: Decimal("1000.00"))
     jobs.run_job("weekly")
-    text = env.telegram.send_message.call_args.args[1]
-    assert text.splitlines()[1].startswith("Exceso en ocio (50/30/20): 80.00 de 70.00")
-    assert len(text.splitlines()) == 2
+    lines = env.telegram.send_message.call_args.args[1].splitlines()
+    assert lines[2] == "Mes: ingresos 1000.00, gastos 100.00 USD."
+    assert lines[3].startswith("Ahorra 200.00 (20%). Te quedan 700.00 USD para el mes")
+    monkeypatch.setattr(ledger, "total_ingresos", lambda *a: Decimal("100.00"))
+    jobs.run_job("weekly")
+    lines = env.telegram.send_message.call_args.args[1].splitlines()
+    assert lines[3] == "Te pasaste 20.00 USD: el ahorro de 20.00 está en riesgo."
 
 
 def test_one_failing_chat_does_not_stop_others(

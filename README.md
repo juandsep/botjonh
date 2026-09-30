@@ -148,8 +148,14 @@ to the LLM.
 
 **Reaction GIFs.** Send a GIF with the caption `gasto` or `ingreso` (or reply
 to a GIF with `/gif gasto`) to save it (`gifs/{chat_id}`, 20 per type). After
-each registration the bot sends a random one of that type; `/gif` shows usage
-and counts.
+each quick registration the bot answers with a random one of that type and no
+text; the text line (`−0.49 USD · café (2,000 COP)`) is only the fallback when
+no GIF is stored or sending it fails. `/gif` shows usage and counts.
+
+**Scheduled messages** (America/Panama): 07:30 agenda of the day and
+yesterday's spend; 22:00 every movement of the day and the day's spend;
+Sunday 20:00 the week's spend, top categories and, against the month's income,
+the 20% to save and what is left per week.
 
 ## Finance ledger and reporting
 
