@@ -1,0 +1,6 @@
+# The detect-secrets baseline stores hashes of known false positives.
+[extend]
+useDefault = true
+
+[allowlist]
+paths = ['''^\.secrets\.baseline$''']

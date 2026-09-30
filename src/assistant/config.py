@@ -67,8 +67,17 @@ class WorkerSettings:
     project_id: str
     telegram_bot_token: str
     deepseek_api_key: str
-    spreadsheet_id: str = ""
-    calendar_id: str = ""
+    # Reminders: Cloud Tasks POST to {worker_url}/tasks/reminder with an OIDC
+    # token for worker_sa. Empty worker_url or worker_sa: reminders are skipped.
+    worker_url: str = ""
+    worker_sa: str = ""
+    tasks_queue: str = "assistant-reminders"
+    tasks_location: str = "us-central1"
+    # Public assistant-api URL, for the ICS subscription link.
+    api_url: str = ""
+    # Cloud KMS key that encrypts each user's secret iCal URL. Empty: /conectar
+    # is refused, so the URL is never stored in clear.
+    kms_key: str = ""
     mlflow_tracking_uri: str = ""
     backup_bucket: str = ""
     llm_model: str = "deepseek-flash"
@@ -94,8 +103,12 @@ class WorkerSettings:
             project_id=_require(values, "GCP_PROJECT_ID"),
             telegram_bot_token=_require(values, "TELEGRAM_BOT_TOKEN"),
             deepseek_api_key=_require(values, "DEEPSEEK_API_KEY"),
-            spreadsheet_id=get("SPREADSHEET_ID", ""),
-            calendar_id=get("CALENDAR_ID", ""),
+            worker_url=get("WORKER_URL", "").rstrip("/"),
+            worker_sa=get("WORKER_SA", ""),
+            tasks_queue=get("TASKS_QUEUE", "assistant-reminders"),
+            tasks_location=get("TASKS_LOCATION", "us-central1"),
+            api_url=get("API_URL", "").rstrip("/"),
+            kms_key=get("KMS_KEY", ""),
             mlflow_tracking_uri=get("MLFLOW_TRACKING_URI", ""),
             backup_bucket=get("BACKUP_BUCKET", ""),
             llm_model=get("LLM_MODEL", "deepseek-flash"),

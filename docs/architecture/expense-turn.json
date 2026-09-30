@@ -1,0 +1,179 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "One expense message: caf\u00e9 2000cop",
+    "output": "expense-turn.html",
+    "viewBox": [
+      1080,
+      560
+    ],
+    "quality_profile": "showcase",
+    "column_fit": "spread"
+  },
+  "participants": [
+    {
+      "id": "telegram",
+      "type": "external",
+      "label": "Telegram",
+      "sublabel": "Bot API"
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "assistant-api",
+      "sublabel": "public"
+    },
+    {
+      "id": "pubsub",
+      "type": "messagebus",
+      "label": "Pub/Sub",
+      "sublabel": "updates"
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "assistant-worker",
+      "sublabel": "private"
+    },
+    {
+      "id": "firestore",
+      "type": "database",
+      "label": "Firestore",
+      "sublabel": "state + ledger"
+    },
+    {
+      "id": "fx",
+      "type": "external",
+      "label": "TRM",
+      "sublabel": "datos.gov.co"
+    }
+  ],
+  "segments": [
+    {
+      "from": 142,
+      "to": 264,
+      "label": "Ack fast"
+    },
+    {
+      "from": 278,
+      "to": 372,
+      "label": "Convert and write"
+    },
+    {
+      "from": 386,
+      "to": 476,
+      "label": "Reply"
+    }
+  ],
+  "messages": [
+    {
+      "from": "telegram",
+      "to": "api",
+      "y": 160,
+      "label": "POST /tg/<route> + secret header",
+      "variant": "emphasis"
+    },
+    {
+      "from": "api",
+      "to": "firestore",
+      "y": 190,
+      "label": "allowlist + dedup update_id",
+      "variant": "security"
+    },
+    {
+      "from": "api",
+      "to": "pubsub",
+      "y": 220,
+      "label": "publish update",
+      "variant": "emphasis"
+    },
+    {
+      "from": "api",
+      "to": "telegram",
+      "y": 250,
+      "label": "200 OK",
+      "variant": "return"
+    },
+    {
+      "from": "pubsub",
+      "to": "worker",
+      "y": 296,
+      "label": "OIDC push",
+      "variant": "emphasis"
+    },
+    {
+      "from": "worker",
+      "to": "fx",
+      "y": 326,
+      "label": "TRM if not cached",
+      "variant": "dashed"
+    },
+    {
+      "from": "worker",
+      "to": "firestore",
+      "y": 356,
+      "label": "create() USD rows",
+      "variant": "emphasis"
+    },
+    {
+      "from": "worker",
+      "to": "telegram",
+      "y": 402,
+      "label": "\u22120.49 USD \u00b7 caf\u00e9 (2,000 COP)",
+      "variant": "emphasis"
+    },
+    {
+      "from": "worker",
+      "to": "telegram",
+      "y": 432,
+      "label": "sendAnimation GIF",
+      "variant": "dashed"
+    },
+    {
+      "from": "worker",
+      "to": "pubsub",
+      "y": 462,
+      "label": "204 ack",
+      "variant": "return"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "api",
+      "from": 154,
+      "to": 258,
+      "type": "backend"
+    },
+    {
+      "participant": "worker",
+      "from": 290,
+      "to": 470,
+      "type": "backend"
+    },
+    {
+      "participant": "fx",
+      "from": 320,
+      "to": 334,
+      "type": "external"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "No LLM",
+      "items": [
+        "The quick parser reads amount, currency and note",
+        "Zero tokens, reply in about a second"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Idempotent",
+      "items": [
+        "Retries hit create() on the same ids and write nothing",
+        "update_id dedup stops Telegram re-deliveries"
+      ]
+    }
+  ]
+}

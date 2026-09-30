@@ -1,6 +1,6 @@
 # Base GCP resources for the Telegram assistant: APIs, Firestore, artifact
 # registry, secrets, service accounts, Workload Identity Federation, Pub/Sub
-# topics, Cloud Scheduler jobs and a budget guard. The Cloud Run services
+# topics, Cloud Scheduler jobs, the Cloud Tasks reminder queue and a budget guard. The Cloud Run services
 # (assistant-api, assistant-worker) are deployed by GitHub Actions, not here;
 # their push subscription is gated on worker_url (set it after the first deploy).
 # State is local (terraform.tfstate, git-ignored).
@@ -72,15 +72,16 @@ data "google_project" "this" {}
 resource "google_project_service" "apis" {
   for_each = toset([
     "artifactregistry.googleapis.com",
+    "bigquery.googleapis.com",
     "cloudbuild.googleapis.com",
     "cloudresourcemanager.googleapis.com",
+    "cloudkms.googleapis.com",
     "cloudscheduler.googleapis.com",
+    "cloudtasks.googleapis.com",
     "firestore.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
     "pubsub.googleapis.com",
-    "sheets.googleapis.com",
-    "calendar-json.googleapis.com",
     "run.googleapis.com",
     "secretmanager.googleapis.com",
     "storage.googleapis.com",
@@ -217,8 +218,9 @@ resource "google_secret_manager_secret_iam_member" "webhook_reads_secrets" {
   member    = google_service_account.sa["webhook"].member
 }
 
-# Weekly backup of Firestore and the ledger as JSON. The worker only creates
-# objects; versioning plus a 90-day lifecycle keep old copies bounded.
+# Weekly JSON backup of Firestore under backup/ (90-day lifecycle) and the daily
+# ledger CSV export under ledger/ (kept: BigQuery reads it). The worker only
+# creates objects, so it can never overwrite or delete either.
 resource "google_storage_bucket" "backup" {
   name                        = "${var.project_id}-backup"
   location                    = var.region
@@ -231,7 +233,8 @@ resource "google_storage_bucket" "backup" {
   }
   lifecycle_rule {
     condition {
-      age = 90
+      age            = 90
+      matches_prefix = ["backup/"]
     }
     action {
       type = "Delete"
@@ -243,6 +246,68 @@ resource "google_storage_bucket_iam_member" "worker_writes_backup" {
   bucket = google_storage_bucket.backup.name
   role   = "roles/storage.objectCreator"
   member = google_service_account.sa["worker"].member
+}
+
+# BigQuery over the ledger CSVs for Looker Studio: an external table costs no
+# storage and queries of a few KB fall in the free tier.
+resource "google_bigquery_dataset" "botjonh" {
+  dataset_id                 = "botjonh"
+  location                   = "US"
+  delete_contents_on_destroy = false
+  depends_on                 = [google_project_service.apis]
+}
+
+# BigQuery refuses a hive-partitioned external table with no files, so a
+# header-only CSV (zero rows, skip_leading_rows = 1) seeds the first partition.
+resource "google_storage_bucket_object" "ledger_seed" {
+  bucket       = google_storage_bucket.backup.name
+  name         = "ledger/mes=2026-09/_header.csv"
+  content      = "fecha,chat_id,tipo_mov,categoria,monto,moneda,nota,batch_id,tipo,monto_original,moneda_original,tasa\n"
+  content_type = "text/csv"
+}
+
+resource "google_bigquery_table" "ledger" {
+  depends_on = [google_storage_bucket_object.ledger_seed]
+
+  dataset_id          = google_bigquery_dataset.botjonh.dataset_id
+  table_id            = "ledger"
+  deletion_protection = false
+
+  external_data_configuration {
+    autodetect    = false
+    source_format = "CSV"
+    source_uris   = ["gs://${google_storage_bucket.backup.name}/ledger/*"]
+
+    csv_options {
+      quote                 = "\""
+      skip_leading_rows     = 1
+      allow_quoted_newlines = true
+      # Exports before the USD ledger have no monto_original/moneda_original/tasa.
+      allow_jagged_rows = true
+    }
+
+    # Adds the partition column mes (YYYY-MM) from ledger/mes=YYYY-MM/.
+    hive_partitioning_options {
+      mode                     = "AUTO"
+      source_uri_prefix        = "gs://${google_storage_bucket.backup.name}/ledger/"
+      require_partition_filter = false
+    }
+
+    schema = jsonencode([
+      { name = "fecha", type = "DATE" },
+      { name = "chat_id", type = "STRING" },
+      { name = "tipo_mov", type = "STRING" },
+      { name = "categoria", type = "STRING" },
+      { name = "monto", type = "NUMERIC" },
+      { name = "moneda", type = "STRING" },
+      { name = "nota", type = "STRING" },
+      { name = "batch_id", type = "STRING" },
+      { name = "tipo", type = "STRING" },
+      { name = "monto_original", type = "NUMERIC" },
+      { name = "moneda_original", type = "STRING" },
+      { name = "tasa", type = "NUMERIC" },
+    ])
+  }
 }
 
 # Pub/Sub signs push requests with the worker account's OIDC token, so that
@@ -276,6 +341,12 @@ resource "google_pubsub_subscription" "updates_push" {
   topic = google_pubsub_topic.updates.name
 
   ack_deadline_seconds = 60
+  # A failing message is dropped after 10 minutes instead of 7 days.
+  message_retention_duration = "600s"
+  retry_policy {
+    minimum_backoff = "10s"
+    maximum_backoff = "600s"
+  }
   push_config {
     push_endpoint = "${var.worker_url}/push"
     oidc_token {
@@ -290,6 +361,12 @@ resource "google_pubsub_subscription" "cron_push" {
   topic = google_pubsub_topic.cron.name
 
   ack_deadline_seconds = 120
+  # A failing message is dropped after 10 minutes instead of 7 days.
+  message_retention_duration = "600s"
+  retry_policy {
+    minimum_backoff = "10s"
+    maximum_backoff = "600s"
+  }
   push_config {
     push_endpoint = "${var.worker_url}/push"
     oidc_token {
@@ -298,12 +375,49 @@ resource "google_pubsub_subscription" "cron_push" {
   }
 }
 
+# Reminders: the worker enqueues one task per reminder (deterministic name) that
+# POSTs to {worker_url}/tasks/reminder at the exact time, with an OIDC token for
+# the worker account (already run.invoker). One queue serves staging and prod:
+# each task carries its full target URL.
+resource "google_cloud_tasks_queue" "reminders" {
+  name       = "assistant-reminders"
+  location   = var.region
+  depends_on = [google_project_service.apis]
+
+  rate_limits {
+    max_dispatches_per_second = 1
+    max_concurrent_dispatches = 2
+  }
+  retry_config {
+    max_attempts  = 5
+    min_backoff   = "10s"
+    max_backoff   = "300s"
+    max_doublings = 3
+  }
+}
+
+resource "google_cloud_tasks_queue_iam_member" "worker_tasks" {
+  for_each = toset(["roles/cloudtasks.enqueuer", "roles/cloudtasks.taskDeleter"])
+  name     = google_cloud_tasks_queue.reminders.name
+  location = google_cloud_tasks_queue.reminders.location
+  role     = each.value
+  member   = google_service_account.sa["worker"].member
+}
+
+# Creating a task with an OIDC token for an account needs actAs on it: the
+# worker signs its reminder tasks as itself.
+resource "google_service_account_iam_member" "worker_acts_as_itself" {
+  service_account_id = google_service_account.sa["worker"].name
+  role               = "roles/iam.serviceAccountUser"
+  member             = google_service_account.sa["worker"].member
+}
+
 # Cloud Scheduler publishes directly to the cron topic (no HTTP endpoints).
 locals {
   jobs = {
     digest  = { schedule = "30 7 * * *", label = "morning digest" }
-    checkin = { schedule = "0 21 * * *", label = "end-of-day checkin" }
-    weekly  = { schedule = "0 19 * * 0", label = "weekly review" }
+    checkin = { schedule = "0 22 * * *", label = "list of the day's movements" }
+    weekly  = { schedule = "0 20 * * 0", label = "weekly spend vs income" }
   }
 }
 
@@ -365,6 +479,30 @@ module "budget_guard" {
   source_bucket   = google_storage_bucket.functions.name
 }
 
+# Encrypts each user's secret iCal URL before it reaches Firestore (and so the
+# backups). Key rings and keys cannot be deleted in GCP, hence prevent_destroy.
+resource "google_kms_key_ring" "botjonh" {
+  name       = "botjonh"
+  location   = var.region
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_kms_crypto_key" "ics_url" {
+  name            = "ics-url"
+  key_ring        = google_kms_key_ring.botjonh.id
+  rotation_period = "31536000s" # yearly; old versions stay to decrypt old data
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_kms_crypto_key_iam_member" "worker_uses_ics_key" {
+  crypto_key_id = google_kms_crypto_key.ics_url.id
+  role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+  member        = google_service_account.sa["worker"].member
+}
+
 # Values for the GitHub repository variables (see README).
 output "github_variables" {
   value = {
@@ -377,6 +515,11 @@ output "github_variables" {
     GCP_WORKER_SA     = google_service_account.sa["worker"].email
     BACKUP_BUCKET     = google_storage_bucket.backup.name
   }
+}
+
+# Looker Studio data source: BigQuery -> this table.
+output "bigquery_ledger_table" {
+  value = "${var.project_id}.${google_bigquery_dataset.botjonh.dataset_id}.${google_bigquery_table.ledger.table_id}"
 }
 
 # Hand these to portfolio-infra so it can grant MLflow access.

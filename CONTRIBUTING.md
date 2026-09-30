@@ -54,6 +54,9 @@ uvx detect-secrets audit .secrets.baseline
 ```
 
 CI runs the same `detect-secrets` hook plus gitleaks over the pushed commits.
+CI also fails under 80% test coverage, writes the coverage table to the job
+summary and, when the `SONAR_TOKEN` secret is set, sends the analysis and
+`coverage.xml` to SonarQube Cloud (`sonar-project.properties`).
 Dependabot opens weekly update PRs into `dev` for uv, GitHub Actions and Docker.
 
 If a real secret ever reaches a commit, treat it as compromised: rotate it
@@ -71,7 +74,8 @@ Logging; message text is stored hashed in MLflow.
 ## Prompts and tools
 
 The system prompt and tool schemas are versioned artifacts under
-`src/assistant/llm/`. A change there bumps the prompt version, which is
+`src/assistant/llm/`. The prompt version is the sha256 (12 hex chars) of
+`system.md` plus the tools JSON, so any change bumps it automatically; it is
 recorded in MLflow so latency and cost are comparable across versions. Tool
 names are allowlisted in `tools.py`; the LLM emits JSON validated against a
 schema and the code performs the write — the model never executes anything.

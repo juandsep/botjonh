@@ -8,9 +8,38 @@ from __future__ import annotations
 
 import httpx
 
-from assistant.channels.base import Channel
+from assistant.channels.base import Channel, InboundMessage
 
 API_BASE = "https://api.telegram.org"
+
+
+def parse_update(update: object) -> InboundMessage | None:
+    """A ``message`` (text or GIF) or ``callback_query``; None for anything else."""
+    if not isinstance(update, dict):
+        return None
+    try:
+        if "callback_query" in update:
+            cq = update["callback_query"]
+            return InboundMessage(
+                chat_id=str(cq["message"]["chat"]["id"]),
+                text="",
+                update_id=int(update["update_id"]),
+                callback_data=str(cq.get("data", "")),
+                callback_query_id=str(cq["id"]),
+            )
+        msg = update["message"]
+        replied = (msg.get("reply_to_message") or {}).get("animation") or {}
+        return InboundMessage(
+            chat_id=str(msg["chat"]["id"]),
+            text=str(msg.get("text", "")),
+            update_id=int(update["update_id"]),
+            message_id=msg.get("message_id"),
+            animation_file_id=(msg.get("animation") or {}).get("file_id"),
+            caption=str(msg.get("caption", "")),
+            reply_animation_file_id=replied.get("file_id"),
+        )
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
 
 
 class Telegram(Channel):
@@ -45,3 +74,9 @@ class Telegram(Channel):
             callback_query_id=callback_query_id,
             text=text,
         )
+
+    def delete_message(self, chat_id: str, message_id: int) -> None:
+        self._post("deleteMessage", chat_id=chat_id, message_id=message_id)
+
+    def send_animation(self, chat_id: str, file_id: str) -> None:
+        self._post("sendAnimation", chat_id=chat_id, animation=file_id)

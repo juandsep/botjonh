@@ -35,3 +35,8 @@ infra/*.tfstate*
 infra/terraform.tfvars
 infra/tfplan
 .claude/settings.local.json
+infra/apply.log
+coverage.xml
+
+# archify browser-check evidence
+docs/architecture/*.visual-check.*
