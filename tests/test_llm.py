@@ -35,7 +35,14 @@ def calls(monkeypatch):
         return fn
 
     for mod, names in {
-        "ledger": ["registrar_gasto", "registrar_ingreso", "resumen_finanzas"],
+        "ledger": [
+            "registrar_gasto",
+            "registrar_ingreso",
+            "resumen_finanzas",
+            "ultimos_texto",
+            "editar",
+            "anular",
+        ],
         "budgets": ["recomendar_presupuesto"],
         "agenda": [
             "crear_evento",
@@ -371,3 +378,54 @@ def test_client_error_raises() -> None:
     respx.post(URL).mock(return_value=httpx.Response(400))
     with pytest.raises(httpx.HTTPStatusError):
         client.run_turn(ctx(), "x", [])
+
+
+# --- editing movements ------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("name", "raw"),
+    [
+        ("ultimos_movimientos", '{"n": 5, "x": 1}'),
+        ("ultimos_movimientos", '{"n": 0}'),
+        ("editar_movimiento", '{"indice": 1, "monto": 3, "extra": true}'),
+        ("editar_movimiento", '{"indice": 0, "monto": 3}'),
+        ("editar_movimiento", '{"indice": 1, "monto": -3}'),
+        ("editar_movimiento", '{"indice": 1, "moneda": "dolares"}'),
+        ("editar_movimiento", '{"indice": 1, "categoria": "cafe"}'),
+        ("anular_movimiento", '{"indice": 1, "todo": true}'),
+        ("anular_movimiento", "{}"),
+    ],
+)
+def test_edit_tools_reject_bad_args(name, raw) -> None:
+    with pytest.raises(ToolRejected, match="invalid_args"):
+        validate_args(name, raw)
+
+
+def test_ultimos_and_editar_map_to_the_ledger(calls) -> None:
+    assert tools.handle_call(ctx(), "ultimos_movimientos", '{"n": 5}') == (
+        "ok ultimos_texto",
+        None,
+    )
+    raw = '{"indice": 1, "monto": 3, "moneda": "USD", "categoria": null, "nota": null}'
+    assert tools.handle_call(ctx(), "editar_movimiento", raw)[0] == "ok editar"
+    assert calls == [
+        ("ultimos_texto", {"n": 5}),
+        (
+            "editar",
+            {
+                "indice": 1,
+                "monto": Decimal(3),
+                "moneda": "USD",
+                "categoria": None,
+                "nota": None,
+            },
+        ),
+    ]
+
+
+def test_anular_movimiento_needs_confirmation(calls) -> None:
+    question, token = tools.handle_call(ctx(), "anular_movimiento", '{"indice": 2}')
+    assert (question, token, calls) == ("¿Anulo el movimiento 2?", "t1", [])
+    assert execute_pending(ctx(), "t1") == "ok anular"
+    assert calls == [("anular", {"indice": 2})]

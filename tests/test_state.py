@@ -202,3 +202,16 @@ def test_ics_token_format_checked_before_lookup(monkeypatch) -> None:
     monkeypatch.setattr(state, "_db", boom)
     for bad in ("", "short", "a" * 31 + "/", "../users/1" + "a" * 22, "a" * 33):
         assert state.chat_for_ics_token(bad) is None
+
+
+def test_gifs_dedupe_cap_and_random(db) -> None:
+    assert state.random_gif("1", "gasto") is None
+    for i in range(25):
+        state.add_gif("1", "gasto", f"f{i}")
+    state.add_gif("1", "gasto", "f10")  # repeated: moves to the end, no copy
+    state.add_gif("1", "ingreso", "i0")
+    ids = state.gifs("1")
+    assert len(ids["gasto"]) == 20 and ids["gasto"][-1] == "f10"
+    assert ids["gasto"].count("f10") == 1 and ids["ingreso"] == ["i0"]
+    assert state.random_gif("1", "gasto") in ids["gasto"]
+    assert state.random_gif("1", "ingreso") == "i0"

@@ -28,7 +28,7 @@ from assistant.channels.base import InboundMessage
 from assistant.channels.telegram import Telegram, parse_update
 from assistant.config import WorkerSettings, get_worker_settings
 from assistant.context import ToolContext
-from assistant.services import agenda, state
+from assistant.services import agenda, quick, state
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="assistant-worker")
@@ -39,6 +39,14 @@ WELCOME = "Hola. Escríbeme gastos, ingresos o citas y yo los registro."
 TEXT_ONLY = "Por ahora solo entiendo texto."
 FAILED_REPLY = "No pude hacerlo, intenta de nuevo."
 GOOGLE_HINT = "Google Calendar: Otros calendarios → + → Desde URL, y pega el enlace."
+GIF_USAGE = (
+    "Envía un GIF con el texto gasto o ingreso, o responde a uno con /gif gasto."
+    " Tienes {gasto} de gasto y {ingreso} de ingreso."
+)
+EDIT_USAGE = "Uso: /editar <n> <monto>[moneda], ej. /editar 1 3usd"
+ANULAR_USAGE = "Uso: /anular <n>, ej. /anular 1"
+LEDGER_COMMANDS = ("/ultimos", "/editar", "/anular", "/gif")
+REGISTROS = {"registrar_gasto": "gasto", "registrar_ingreso": "ingreso"}
 
 
 @app.get("/health")
@@ -119,6 +127,9 @@ def handle_update(msg: InboundMessage, settings: WorkerSettings) -> int:
     if msg.text.startswith("/start"):
         _send(channel, msg, WELCOME)
         return ACK
+    if msg.animation_file_id:
+        _send(channel, msg, _save_gif(msg, msg.caption, msg.animation_file_id))
+        return ACK
     if not msg.text.strip():
         _send(channel, msg, TEXT_ONLY)
         return ACK
@@ -132,6 +143,13 @@ def handle_update(msg: InboundMessage, settings: WorkerSettings) -> int:
             except httpx.HTTPError:
                 logger.warning("delete_failed update_id=%s", msg.update_id)
         _send(channel, msg, reply)
+        return ACK
+    if msg.text.startswith(LEDGER_COMMANDS):
+        _send(channel, msg, *_ledger_command(ctx, msg))
+        return ACK
+    entry = quick.parse(msg.text)
+    if entry is not None:  # deterministic: no LLM, no spend, no history
+        _quick(ctx, msg, entry, channel)
         return ACK
 
     # 1. Rate limit and daily cap: fail closed without calling the LLM.
@@ -162,6 +180,9 @@ def handle_update(msg: InboundMessage, settings: WorkerSettings) -> int:
 
     # 3-5. Reply, account, trace.
     _send(channel, msg, result.reply, result.keyboard)
+    registros = [REGISTROS[t] for t in result.tools if t in REGISTROS]
+    if registros and not result.keyboard:
+        _gif(channel, msg, registros[-1])
     state.add_llm_spend(msg.chat_id, result.cost_usd)
     state.append_history(msg.chat_id, result.messages)
     from assistant.observability import trace
@@ -194,6 +215,102 @@ def _command(ctx: ToolContext, msg: InboundMessage, settings: WorkerSettings) ->
             "command_failed update_id=%s error=%s", msg.update_id, type(exc).__name__
         )
         return FAILED_REPLY
+
+
+def _quick(
+    ctx: ToolContext, msg: InboundMessage, entry: quick.Entry, channel: Telegram
+) -> None:
+    if entry.error:
+        _send(channel, msg, entry.error)
+        return
+    fecha = ctx.ahora.date()
+    try:
+        ledger = importlib.import_module("assistant.services.ledger")
+        if entry.tipo == "ingreso":
+            reply = ledger.registrar_ingreso(
+                ctx,
+                monto=entry.monto,
+                moneda=entry.moneda,
+                fuente=entry.nota,
+                fecha=fecha,
+            )
+        else:
+            item = {
+                "monto": entry.monto,
+                "categoria": entry.categoria,
+                "nota": entry.nota or None,
+            }
+            reply = ledger.registrar_gasto(
+                ctx, items=[item], moneda=entry.moneda, fecha=fecha
+            )
+    except Exception as exc:
+        logger.error(
+            "quick_failed update_id=%s error=%s", msg.update_id, type(exc).__name__
+        )
+        _send(channel, msg, FAILED_REPLY)
+        return
+    logger.info("quick_entry update_id=%s", msg.update_id)
+    _send(channel, msg, str(reply))
+    _gif(channel, msg, entry.tipo)
+
+
+def _ledger_command(
+    ctx: ToolContext, msg: InboundMessage
+) -> tuple[str, list[list[tuple[str, str]]] | None]:
+    """/ultimos, /editar n monto, /anular n (buttons), /gif: no LLM."""
+    from assistant.llm import tools
+
+    cmd, _, arg = msg.text.strip().partition(" ")
+    cmd, arg = cmd.split("@")[0], arg.strip()
+    if cmd == "/gif":
+        return _save_gif(msg, arg, msg.reply_animation_file_id), None
+    n, _, rest = arg.partition(" ")
+    usage = ANULAR_USAGE if cmd == "/anular" else EDIT_USAGE
+    args: dict[str, Any] = {"indice": int(n)} if n.isdecimal() else {}
+    found = quick.amount(rest) if rest else None
+    if cmd == "/ultimos":
+        name, args = "ultimos_movimientos", {"n": 5}
+    elif cmd == "/editar" and args and found:
+        name, args = (
+            "editar_movimiento",
+            {**args, "monto": found[0], "moneda": found[1]},
+        )
+    elif cmd == "/anular" and args and not rest:
+        name = "anular_movimiento"
+    else:
+        return usage, None
+    try:  # same validation as the LLM path; Decimal goes as an exact string
+        reply, token = tools.handle_call(ctx, name, json.dumps(args, default=str))
+    except tools.ToolRejected:  # monto <= 0, índice fuera de rango
+        return usage, None
+    except Exception as exc:
+        logger.error(
+            "command_failed update_id=%s error=%s", msg.update_id, type(exc).__name__
+        )
+        return FAILED_REPLY, None
+    return reply, tools.buttons(token) if token else None
+
+
+def _save_gif(msg: InboundMessage, tipo: str, file_id: str | None) -> str:
+    tipo = quick.norm(tipo.strip())
+    if file_id and tipo in ("gasto", "ingreso"):
+        state.add_gif(msg.chat_id, tipo, file_id)
+        logger.info("gif_saved update_id=%s", msg.update_id)
+        return f"✓ GIF guardado para {tipo}."
+    counts = {t: len(ids) for t, ids in state.gifs(msg.chat_id).items()}
+    return GIF_USAGE.format(**counts)
+
+
+def _gif(channel: Telegram, msg: InboundMessage, tipo: str) -> None:
+    """Best effort reaction GIF after a registration; nothing when none stored."""
+    try:
+        file_id = state.random_gif(msg.chat_id, tipo)
+        if file_id:
+            channel.send_animation(msg.chat_id, file_id)
+    except Exception as exc:
+        logger.warning(
+            "gif_failed update_id=%s error=%s", msg.update_id, type(exc).__name__
+        )
 
 
 def _send(

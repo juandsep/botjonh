@@ -26,7 +26,7 @@ def envelope(payload) -> dict:
     return {"message": {"data": data, "messageId": "1"}, "subscription": "s"}
 
 
-def message(text="gasté 5 en pan") -> dict:
+def message(text="¿cuánto gasté hoy?") -> dict:
     return {"update_id": 9, "message": {"chat": {"id": 42}, "text": text}}
 
 
@@ -59,6 +59,9 @@ def st(monkeypatch):
     m.check_rate.return_value = True
     m.llm_spend_today.return_value = Decimal("0")
     m.get_history.return_value = []
+    m.random_gif.return_value = None
+    m.gifs.return_value = {"gasto": ["a", "b"], "ingreso": []}
+    m.create_pending.return_value = "t" * 22
     for name in (
         "get_user",
         "check_rate",
@@ -67,6 +70,10 @@ def st(monkeypatch):
         "add_llm_spend",
         "append_history",
         "pop_pending",
+        "random_gif",
+        "add_gif",
+        "gifs",
+        "create_pending",
     ):
         monkeypatch.setattr(state, name, getattr(m, name))
     return m
@@ -78,6 +85,7 @@ def llm(monkeypatch):
         reply="Anotado.",
         keyboard=[[("Sí", "ok:t")]],
         messages=[{"role": "user", "content": "x"}],
+        tools=[],
         cost_usd=Decimal("0.001"),
     )
     run_turn = MagicMock(return_value=result)
@@ -99,6 +107,9 @@ def tg():
             return_value=httpx.Response(200, json={"ok": True})
         )
         router.post(f"{TG}/answerCallbackQuery").mock(
+            return_value=httpx.Response(200, json={"ok": True})
+        )
+        router.post(f"{TG}/sendAnimation").mock(
             return_value=httpx.Response(200, json={"ok": True})
         )
         router.post(f"{TG}/deleteMessage").mock(
@@ -139,7 +150,7 @@ def test_turn_in_order(st, llm, tg) -> None:
         "42",
         "owner",
         9,
-        "gasté 5 en pan",
+        "¿cuánto gasté hoy?",
     )
     assert ctx.ahora.tzinfo is not None
     body = json.loads(tg.calls.last.request.read())
@@ -147,7 +158,7 @@ def test_turn_in_order(st, llm, tg) -> None:
     st.add_llm_spend.assert_called_once_with("42", Decimal("0.001"))
     st.append_history.assert_called_once_with("42", llm.result.messages)
     record_args = llm.record.call_args.args
-    assert record_args[0] is llm.result and record_args[2] == "gasté 5 en pan"
+    assert record_args[0] is llm.result and record_args[2] == "¿cuánto gasté hoy?"
 
 
 def test_rate_limit_skips_llm(st, llm, tg) -> None:
@@ -312,6 +323,175 @@ def test_conectar_deletes_the_message_with_the_url(monkeypatch, st, llm, tg) -> 
     assert sent_texts(tg) == [
         "✓ Calendario conectado.\nBorré tu mensaje con el enlace."
     ]
+
+
+# --- quick entry, ledger commands and GIFs (no LLM) ------------------------------
+
+
+@pytest.fixture
+def ledger(monkeypatch):
+    return fake_module(
+        monkeypatch,
+        "assistant.services.ledger",
+        registrar_gasto=MagicMock(return_value="✓ 2.00 USD → restaurantes"),
+        registrar_ingreso=MagicMock(return_value="✓ ingreso 1000.00 USD"),
+        ultimos_texto=MagicMock(return_value="1. cafe 2.00 USD"),
+        editar=MagicMock(return_value="✓ editado"),
+        anular=MagicMock(return_value="✓ anulado"),
+    )
+
+
+def animations(tg) -> list[dict]:
+    return [
+        json.loads(c.request.read())
+        for c in tg.calls
+        if c.request.url.path.endswith("sendAnimation")
+    ]
+
+
+def test_quick_gasto_skips_llm_and_sends_gif(st, llm, tg, ledger) -> None:
+    st.random_gif.return_value = "gif1"
+    assert (
+        client.post("/push", json=envelope(message("2000 cop cafe"))).status_code == 204
+    )
+    ctx = ledger.registrar_gasto.call_args.args[0]
+    assert ledger.registrar_gasto.call_args.kwargs == {
+        "items": [
+            {"monto": Decimal(2000), "categoria": "restaurantes", "nota": "cafe"}
+        ],
+        "moneda": "COP",
+        "fecha": ctx.ahora.date(),
+    }
+    assert sent_texts(tg) == ["✓ 2.00 USD → restaurantes"]
+    assert animations(tg) == [{"chat_id": "42", "animation": "gif1"}]
+    st.random_gif.assert_called_once_with("42", "gasto")
+    llm.run_turn.assert_not_called()
+    st.check_rate.assert_not_called()
+    st.add_llm_spend.assert_not_called()
+    st.append_history.assert_not_called()
+
+
+def test_quick_ingreso_without_gif_stored(st, llm, tg, ledger) -> None:
+    client.post("/push", json=envelope(message("ingreso 1000 salario")))
+    kwargs = ledger.registrar_ingreso.call_args.kwargs
+    assert (kwargs["monto"], kwargs["moneda"], kwargs["fuente"]) == (
+        Decimal(1000),
+        "USD",
+        "salario",
+    )
+    assert sent_texts(tg) == ["✓ ingreso 1000.00 USD"] and animations(tg) == []
+    llm.run_turn.assert_not_called()
+
+
+def test_quick_errors_never_5xx(st, llm, tg, ledger, caplog) -> None:
+    client.post("/push", json=envelope(message("-5 cafe")))
+    ledger.registrar_gasto.assert_not_called()
+    ledger.registrar_gasto.side_effect = RuntimeError("down")
+    assert client.post("/push", json=envelope(message("cafe 5"))).status_code == 204
+    ledger.registrar_gasto.side_effect = None
+    st.random_gif.return_value = "gif1"
+    tg.post(f"{TG}/sendAnimation").mock(return_value=httpx.Response(400))
+    assert client.post("/push", json=envelope(message("cafe 7"))).status_code == 204
+    assert sent_texts(tg) == [
+        "El monto debe ser mayor que 0.",
+        worker.FAILED_REPLY,
+        "✓ 2.00 USD → restaurantes",
+    ]
+    assert "gif_failed" in caplog.text and "gif1" not in caplog.text
+    assert "cafe" not in caplog.text
+    llm.run_turn.assert_not_called()
+
+
+def test_llm_registration_sends_gif(st, llm, tg) -> None:
+    st.random_gif.return_value = "gif1"
+    llm.result.keyboard = None
+    llm.result.tools = ["registrar_ingreso"]
+    client.post("/push", json=envelope(message("me pagaron el freelance")))
+    st.random_gif.assert_called_once_with("42", "ingreso")
+    assert animations(tg) == [{"chat_id": "42", "animation": "gif1"}]
+    llm.result.keyboard = [[("Sí", "ok:t")]]  # pending confirmation: no GIF yet
+    llm.result.tools = ["registrar_gasto"]
+    client.post("/push", json=envelope(message("vuelo de 900")))
+    assert len(animations(tg)) == 1
+
+
+def test_ultimos_and_editar(st, llm, tg, ledger) -> None:
+    client.post("/push", json=envelope(message("/ultimos")))
+    client.post("/push", json=envelope(message("/editar 1 3usd")))
+    client.post("/push", json=envelope(message("/editar 2 2000 cop")))
+    for bad in ("/editar", "/editar x 3", "/editar 1 0", "/editar 1 tres"):
+        client.post("/push", json=envelope(message(bad)))
+    assert sent_texts(tg) == [
+        "1. cafe 2.00 USD",
+        "✓ editado",
+        "✓ editado",
+        *[worker.EDIT_USAGE] * 4,
+    ]
+    ledger.ultimos_texto.assert_called_once()
+    assert ledger.ultimos_texto.call_args.kwargs == {"n": 5}
+    assert [c.kwargs for c in ledger.editar.call_args_list] == [
+        {
+            "indice": 1,
+            "monto": Decimal(3),
+            "moneda": "USD",
+            "categoria": None,
+            "nota": None,
+        },
+        {
+            "indice": 2,
+            "monto": Decimal(2000),
+            "moneda": "COP",
+            "categoria": None,
+            "nota": None,
+        },
+    ]
+    llm.run_turn.assert_not_called()
+
+
+def test_anular_asks_then_runs_on_ok(monkeypatch, st, llm, tg, ledger) -> None:
+    token = "t" * 22
+    client.post("/push", json=envelope(message("/anular 1")))
+    client.post("/push", json=envelope(message("/anular")))
+    ledger.anular.assert_not_called()
+    body = json.loads(tg.calls[0].request.read())
+    assert body["text"] == "¿Anulo el movimiento 1?"
+    assert body["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == (
+        f"ok:{token}"
+    )
+    assert st.create_pending.call_args.args[1] == {
+        "tool": "anular_movimiento",
+        "args": {"indice": 1},
+    }
+    st.pop_pending.return_value = st.create_pending.call_args.args[1]
+    client.post("/push", json=envelope(callback(f"ok:{token}")))
+    ledger.anular.assert_called_once()
+    assert ledger.anular.call_args.kwargs == {"indice": 1}
+    assert sent_texts(tg)[1:] == [worker.ANULAR_USAGE, "✓ anulado"]
+
+
+def test_gif_saved_from_caption_and_reply(st, llm, tg) -> None:
+    gif = {"update_id": 11, "message": {"chat": {"id": 42}, "caption": "Gasto"}}
+    gif["message"]["animation"] = {"file_id": "g1"}
+    client.post("/push", json=envelope(gif))
+    reply = message("/gif ingreso")
+    reply["message"]["reply_to_message"] = {"animation": {"file_id": "g2"}}
+    client.post("/push", json=envelope(reply))
+    client.post("/push", json=envelope(message("/gif")))
+    no_caption = {"update_id": 12, "message": {"chat": {"id": 42}}}
+    no_caption["message"]["animation"] = {"file_id": "g3"}
+    client.post("/push", json=envelope(no_caption))
+    assert [c.args for c in st.add_gif.call_args_list] == [
+        ("42", "gasto", "g1"),
+        ("42", "ingreso", "g2"),
+    ]
+    usage = worker.GIF_USAGE.format(gasto=2, ingreso=0)
+    assert sent_texts(tg) == [
+        "✓ GIF guardado para gasto.",
+        "✓ GIF guardado para ingreso.",
+        usage,
+        usage,
+    ]
+    llm.run_turn.assert_not_called()
 
 
 # --- reminders from Cloud Tasks --------------------------------------------------

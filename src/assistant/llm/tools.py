@@ -132,6 +132,31 @@ class Deshacer(_Args):
     batch_id: str | None = None
 
 
+Indice = Annotated[int, Field(ge=1, le=50, description="1 = el más reciente")]
+
+
+class UltimosMovimientos(_Args):
+    """Últimos movimientos numerados (1 = el más reciente)."""
+
+    n: int = Field(default=5, ge=1, le=20)
+
+
+class EditarMovimiento(_Args):
+    """Corrige un movimiento por índice; solo cambia los campos no nulos."""
+
+    indice: Indice
+    monto: Monto | None = None
+    moneda: Moneda | None = None
+    categoria: Categoria | None = None
+    nota: str | None = None
+
+
+class AnularMovimiento(_Args):
+    """Anula un movimiento por índice (el usuario confirma con un botón)."""
+
+    indice: Indice
+
+
 class InvitarBeta(_Args):
     """Solo owner: genera un código de invitación para un beta tester."""
 
@@ -163,6 +188,12 @@ TOOLS: dict[str, tuple[type[_Args], str]] = {
     "recordatorio": (Recordatorio, "assistant.services.agenda:recordatorio"),
     "ver_libres": (VerLibres, "assistant.services.agenda:ver_libres"),
     "deshacer": (Deshacer, "assistant.services.ledger:deshacer"),
+    "ultimos_movimientos": (
+        UltimosMovimientos,
+        "assistant.services.ledger:ultimos_texto",
+    ),
+    "editar_movimiento": (EditarMovimiento, "assistant.services.ledger:editar"),
+    "anular_movimiento": (AnularMovimiento, "assistant.services.ledger:anular"),
     "invitar_beta": (InvitarBeta, "assistant.services.state:invitar_beta"),
     "listar_usuarios": (ListarUsuarios, "assistant.services.state:listar_usuarios"),
 }
@@ -250,6 +281,8 @@ def _confirm_question(name: str, args: _Args) -> str | None:
         return "¿Cancelo el evento?"
     if name == "deshacer":
         return "¿Deshago el último registro?"
+    if isinstance(args, AnularMovimiento):
+        return f"¿Anulo el movimiento {args.indice}?"
     if isinstance(args, RegistrarGasto):
         total = sum((i.monto for i in args.items), Decimal(0))
         if total > get_worker_settings().confirm_above:

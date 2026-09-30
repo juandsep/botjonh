@@ -90,8 +90,13 @@ see [Configuration](#configuration).
 4. In @BotFather, `/setcommands` for the bot and paste:
 
    ```
-   calendario - Próximos 7 días (enlace: suscribirse, nuevo: cambiar enlace)
-   conectar - Conectar un calendario externo (.ics) para ver ocupado
+   calendario - próximos 7 días
+   ultimos - últimos 5 movimientos
+   editar - editar un movimiento: /editar 1 3usd
+   anular - anular un movimiento: /anular 1
+   gif - guardar GIFs de reacción
+   conectar - conectar tu calendario (enlace iCal secreto)
+   start - activar
    ```
 
 5. Add yourself as the owner (your chat id from @userinfobot), with ADC
@@ -116,6 +121,30 @@ see [Configuration](#configuration).
 
 Every merge into `dev` deploys `assistant-api-staging` / `assistant-worker-staging`;
 merging `dev` into `main` deploys production.
+
+## Quick entry and editing (no LLM)
+
+A message with exactly one amount is registered by code, without the LLM (zero
+tokens): `gasto 2 usd cafe`, `2 usd cafe`, `cafe 2000cop gasto`, `2000 cop cafe`,
+`cafe 5`, `$3.50 uber`, `1.234,56 cop arriendo`, `1000usd ingreso`,
+`ingreso 1000 salario`. The word `ingreso` makes it income; anything else is an
+expense (`gasto` is optional). The currency is an ISO code next to the amount
+(USD, COP, EUR, MXN, PEN, CLP, ARS, BRL, GBP, CAD, PAB), `$` or `€`; none means
+USD. The ledger converts to USD. `2,000`/`2.000` are thousands, `2,5` is 2.5.
+The rest of the words are the note; a few keywords pick the category (`cafe` →
+restaurantes, `uber` → transporte, `netflix` → suscripciones…), else `otros`.
+Two amounts, questions, dates or times (`mañana a las 4`, `16:00`, `lunes`) go
+to the LLM.
+
+- `/ultimos`: the last 5 movements, numbered (1 = the most recent).
+- `/editar <n> <monto>[moneda]`: `/editar 1 3usd`, `/editar 2 2000 cop`.
+- `/anular <n>`: asks with Confirmar/Cancelar buttons, then voids it.
+- In free text the LLM does the same: "el último era 3 dólares, no 5".
+
+**Reaction GIFs.** Send a GIF with the caption `gasto` or `ingreso` (or reply
+to a GIF with `/gif gasto`) to save it (`gifs/{chat_id}`, 20 per type). After
+each registration the bot sends a random one of that type; `/gif` shows usage
+and counts.
 
 ## Finance ledger and reporting
 
