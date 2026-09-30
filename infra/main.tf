@@ -256,7 +256,18 @@ resource "google_bigquery_dataset" "botjonh" {
   depends_on                 = [google_project_service.apis]
 }
 
+# BigQuery refuses a hive-partitioned external table with no files, so a
+# header-only CSV (zero rows, skip_leading_rows = 1) seeds the first partition.
+resource "google_storage_bucket_object" "ledger_seed" {
+  bucket       = google_storage_bucket.backup.name
+  name         = "ledger/mes=2026-09/_header.csv"
+  content      = "fecha,chat_id,tipo_mov,categoria,monto,moneda,nota,batch_id,tipo\n"
+  content_type = "text/csv"
+}
+
 resource "google_bigquery_table" "ledger" {
+  depends_on = [google_storage_bucket_object.ledger_seed]
+
   dataset_id          = google_bigquery_dataset.botjonh.dataset_id
   table_id            = "ledger"
   deletion_protection = false
