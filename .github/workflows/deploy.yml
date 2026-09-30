@@ -26,6 +26,8 @@ jobs:
     environment: ${{ github.ref == 'refs/heads/dev' && 'staging' || 'production' }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: Check the required variables
         env:
@@ -89,6 +91,7 @@ jobs:
             --command=uvicorn,assistant.api:app,--host,0.0.0.0,--port,8080,--no-access-log
           env_vars: |
             GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
+            UPDATES_TOPIC=${{ env.STAGING == 'true' && 'assistant-updates-staging' || 'assistant-updates' }}
           secrets: |
             WEBHOOK_SECRET_TOKEN=assistant-webhook-secret:latest
             WEBHOOK_PATH=assistant-webhook-path:latest
@@ -117,5 +120,5 @@ jobs:
             TASKS_LOCATION=${{ vars.GCP_REGION }}
             API_URL=${{ vars.API_URL }}
           secrets: |
-            TELEGRAM_BOT_TOKEN=assistant-bot-token:latest
+            TELEGRAM_BOT_TOKEN=${{ env.STAGING == 'true' && 'assistant-bot-token-staging' || 'assistant-bot-token' }}:latest
             DEEPSEEK_API_KEY=assistant-deepseek-key:latest
