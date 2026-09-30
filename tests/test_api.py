@@ -54,7 +54,13 @@ def test_wrong_path_403(fake) -> None:
 
 def test_known_chat_published(fake) -> None:
     body = update()
-    assert client.post(URL, json=body, headers=HEADERS).status_code == 200
+    resp = client.post(URL, json=body, headers=HEADERS)
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "method": "sendChatAction",
+        "chat_id": "42",
+        "action": "typing",
+    }
     fake.publish.assert_called_once_with("assistant-updates", body)
 
 

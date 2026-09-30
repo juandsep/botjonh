@@ -48,7 +48,10 @@ _ID = re.compile(r"\d{1,20}(-\d{1,2})?")
 
 @cache
 def _db() -> firestore.Client:
-    return firestore.Client(project=os.environ.get("GCP_PROJECT_ID") or None)
+    return firestore.Client(
+        project=os.environ.get("GCP_PROJECT_ID") or None,
+        database=os.environ.get("FIRESTORE_DATABASE") or None,  # staging has its own
+    )
 
 
 @cache

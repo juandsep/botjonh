@@ -72,11 +72,14 @@ def test_event_id_is_deterministic_and_valid_for_google() -> None:
 def test_vincular_probes_write_access_and_stores(db: MagicMock) -> None:
     insert = respx.post(EVENTS).respond(200, json={"id": "probe1"})
     delete = respx.delete(f"{EVENTS}/probe1").respond(204)
-    assert gcal.vincular(ctx(), f" {CAL} ") == "✓ Google Calendar vinculado."
+    assert (
+        gcal.vincular(ctx(), f" {CAL} ")
+        == "✓ Google Calendar vinculado (0 eventos copiados)."
+    )
     assert insert.calls[0].request.headers["Authorization"] == "Bearer tok"
     assert delete.called
-    db.collection.assert_called_with("preferences")
-    db.collection().document.assert_called_with("42")
+    db.collection.assert_any_call("preferences")
+    db.collection().document.assert_any_call("42")
     db.collection().document().set.assert_called_once_with({"gcal_id": CAL}, merge=True)
 
 
@@ -116,7 +119,10 @@ def test_vincular_accepts_group_calendars(db: MagicMock) -> None:
             200, json={"id": "p"}
         )
         respx.delete(url__regex=r".*/events/p").respond(204)
-        assert gcal.vincular(ctx(), group) == "✓ Google Calendar vinculado."
+        assert (
+            gcal.vincular(ctx(), group)
+            == "✓ Google Calendar vinculado (0 eventos copiados)."
+        )
 
 
 def test_vincular_off_unlinks(db: MagicMock) -> None:
@@ -281,3 +287,17 @@ def test_credentials_are_lazy_cached_and_refreshed(
     default.assert_called_once_with(scopes=[gcal.SCOPE])
     assert creds.refresh.call_count == 2
     gcal._creds.cache_clear()
+
+
+def test_backfill_mirrors_only_active_items(
+    db: MagicMock, prefs: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snaps = [
+        types.SimpleNamespace(id="1", to_dict=lambda: {"estado": "activo"}),
+        types.SimpleNamespace(id="2", to_dict=lambda: {"estado": "cancelado"}),
+    ]
+    db.collection().document().collection().where().stream.return_value = snaps
+    mirrored: list[str] = []
+    monkeypatch.setattr(gcal, "espejo_crear", lambda c, i, e: mirrored.append(i))
+    assert gcal._backfill(ctx()) == 1
+    assert mirrored == ["1"]

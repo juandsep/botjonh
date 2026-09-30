@@ -19,6 +19,7 @@ from typing import Any
 
 from fastapi import FastAPI, Request, Response
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse
 
 from assistant.channels.telegram import parse_update
 from assistant.config import get_api_settings
@@ -99,4 +100,13 @@ def _accept(update: Any, topic: str) -> Response:
         )
         state.unmark_processed(msg.update_id)
         return Response(status_code=500)
+    if msg.text and not msg.callback_query_id:
+        # Telegram runs a method returned in the webhook reply: "escribiendo…"
+        # shows at once while the worker (maybe cold) and the LLM answer.
+        typing = {
+            "method": "sendChatAction",
+            "chat_id": msg.chat_id,
+            "action": "typing",
+        }
+        return JSONResponse(typing)
     return Response(status_code=200)

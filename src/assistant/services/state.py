@@ -45,7 +45,10 @@ _ICS_TOKEN = re.compile(r"[A-Za-z0-9_-]{32}")  # secrets.token_urlsafe(24)
 
 @cache
 def _db() -> firestore.Client:
-    return firestore.Client(project=os.environ.get("GCP_PROJECT_ID") or None)
+    return firestore.Client(
+        project=os.environ.get("GCP_PROJECT_ID") or None,
+        database=os.environ.get("FIRESTORE_DATABASE") or None,  # staging has its own
+    )
 
 
 def _doc(collection: str, doc_id: str) -> Any:

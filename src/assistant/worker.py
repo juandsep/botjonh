@@ -101,7 +101,21 @@ def _remind(chat_id: str, evento_id: str) -> None:
     logger.info("reminder_sent")
 
 
+def _warm(settings: WorkerSettings) -> None:
+    """Scheduler ping in waking hours: the push keeps this worker's instance
+    alive and the GET keeps the api's (a cold start of both costs ~10 s)."""
+    if not settings.api_url:
+        return
+    try:
+        httpx.get(f"{settings.api_url}/health", timeout=15)
+    except httpx.HTTPError:
+        logger.warning("warm_api_failed")
+
+
 def _route(payload: Any) -> int:
+    if isinstance(payload, dict) and payload.get("job") == "warm":
+        _warm(get_worker_settings())
+        return ACK
     if isinstance(payload, dict) and "job" in payload:
         from assistant.jobs import run_job
 
