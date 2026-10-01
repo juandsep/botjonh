@@ -262,6 +262,10 @@ def test_dash_token(db) -> None:
     assert doc["expire_at"] - datetime.now(UTC) > timedelta(minutes=59)
     assert state.chat_for_dash_token(token) == "1"
     assert state.dash_token("1") != token  # every link is new
+    long = state.dash_token("1", ttl=timedelta(hours=24))
+    assert db.store[("dash", long)]["expire_at"] - datetime.now(UTC) > timedelta(
+        hours=23
+    )
 
 
 def test_dash_token_expired_or_bogus(db) -> None:

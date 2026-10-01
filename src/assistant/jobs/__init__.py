@@ -1,5 +1,9 @@
-"""Jobs: digest (07:30: ledger CSV, reminders), checkin (22:00: the day's list),
-weekly (Sunday 20:00: backup and the week against the month's income).
+"""Jobs. Cloud Scheduler publishes ``tick`` every hour (UTC); each user gets, in
+their own time zone, the digest at 07:00 (reminders, agenda, yesterday's spend),
+the checkin at 22:00 (the day's list) and on Sunday at 22:00 the checkin plus
+the weekly summary in one message. Once a day, at 12:00 UTC, the tick exports
+the ledger CSV, and on Sunday also runs the backup. ``digest``, ``checkin`` and
+``weekly`` stay runnable by name for manual use.
 
 The assistant is concise: a job messages a chat only when there is something to
 say. One failing chat never stops the others.
@@ -11,7 +15,7 @@ import calendar as cal
 import importlib
 import logging
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -48,7 +52,7 @@ def _checkin(ctx: ToolContext) -> str | None:
 
 
 def _weekly(ctx: ToolContext) -> str | None:
-    """Sunday 20:00: the week's spend, and how much is left after saving 20%."""
+    """Sunday 22:00, after the checkin: the week vs income, minus 20% saved."""
     dia = ledger.hoy(ctx)
     desde, hasta = ledger.rango("semana", dia)
     gastos = ledger.gastos_por_categoria(ctx.chat_id, desde, hasta)
@@ -92,7 +96,36 @@ JOBS: dict[str, Callable[[ToolContext], str | None]] = {
 }
 
 
-def _ctx(chat_id: str, user: dict[str, Any], default_tz: str) -> ToolContext:
+REPORT_DASH_TTL = timedelta(hours=24)
+
+
+def _tick(ctx: ToolContext, state: Any, api_url: str) -> str | None:
+    """The message due at the user's local hour, or None (ledger left unread).
+
+    ponytail: :30/:45 offsets (India, Nepal) get the local hour the tick lands
+    in (07:30, 22:30); add half-hour ticks if those users want the exact time.
+    """
+    if ctx.ahora.hour == 7:
+        return _digest(ctx)
+    if ctx.ahora.hour != 22:
+        return None
+    partes = [_checkin(ctx)]
+    if ctx.ahora.weekday() == 6:  # Sunday: one message, not two
+        partes.append(_weekly(ctx))
+    texto = "\n\n".join(p for p in partes if p)
+    if not texto or not api_url:
+        return texto or None
+    try:
+        token = state.dash_token(ctx.chat_id, ttl=REPORT_DASH_TTL)
+    except Exception as e:
+        log.warning("report_dash_failed error=%s", type(e).__name__)
+        return texto
+    return f"{texto}\nTablero: {api_url}/tablero/{token}"
+
+
+def _ctx(
+    chat_id: str, user: dict[str, Any], default_tz: str, ahora: datetime
+) -> ToolContext:
     zona = user.get("zona_horaria") or default_tz
     return ToolContext(
         chat_id=chat_id,
@@ -100,19 +133,20 @@ def _ctx(chat_id: str, user: dict[str, Any], default_tz: str) -> ToolContext:
         moneda=user.get("moneda", "USD"),
         zona_horaria=zona,
         update_id=0,
-        ahora=datetime.now(ZoneInfo(zona)),
+        ahora=ahora.astimezone(ZoneInfo(zona)),
     )
 
 
 def run_job(name: str) -> None:
-    job = JOBS.get(name)
-    if job is None:
+    if name != "tick" and name not in JOBS:
         raise ValueError(f"unknown job: {name}")
     settings = get_worker_settings()
-    if name == "weekly":
+    ahora = datetime.now(UTC)
+    daily = name == "tick" and ahora.hour == 12
+    if name == "weekly" or (daily and ahora.weekday() == 6):
         # Before messaging: a failed backup raises, so Pub/Sub retries the job.
         backup.run(settings)
-    if name == "digest":
+    if name == "digest" or daily:
         # Before messaging, but best-effort: the weekly backup still has the data.
         try:
             backup.export_ledger(settings)
@@ -126,7 +160,11 @@ def run_job(name: str) -> None:
             user = state.get_user(chat_id)
             if not user:
                 continue
-            texto = job(_ctx(chat_id, user, settings.default_timezone))
+            ctx = _ctx(chat_id, user, settings.default_timezone, ahora)
+            if name == "tick":
+                texto = _tick(ctx, state, settings.api_url)
+            else:
+                texto = JOBS[name](ctx)
             if texto:
                 telegram.send_message(chat_id, texto)
                 sent += 1

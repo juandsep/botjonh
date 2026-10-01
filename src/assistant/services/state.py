@@ -265,10 +265,10 @@ def chat_for_ics_token(token: str) -> str | None:
 # --- web dashboard tokens -------------------------------------------------------
 
 
-def dash_token(chat_id: str) -> str:
-    """A new 1 h link to the chat's dashboard; the TTL policy deletes it later."""
+def dash_token(chat_id: str, ttl: timedelta = DASH_TTL) -> str:
+    """A new link to the chat's dashboard (1 h default); the TTL policy deletes it."""
     token = secrets.token_urlsafe(24)
-    _doc("dash", token).set({"chat_id": chat_id, "expire_at": _now() + DASH_TTL})
+    _doc("dash", token).set({"chat_id": chat_id, "expire_at": _now() + ttl})
     return token
 
 
