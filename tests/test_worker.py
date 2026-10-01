@@ -143,6 +143,20 @@ def test_job_routed(monkeypatch) -> None:
     run_job.assert_called_once_with("digest")
 
 
+def test_warm_pings_the_api_without_running_jobs(monkeypatch) -> None:
+    run_job = MagicMock()
+    monkeypatch.setitem(
+        sys.modules, "assistant.jobs", types.SimpleNamespace(run_job=run_job)
+    )
+    s = dataclasses.replace(get_worker_settings(), api_url="https://api.example")
+    monkeypatch.setattr(worker, "get_worker_settings", lambda: s)
+    get = MagicMock(side_effect=httpx.ConnectError("down"))
+    monkeypatch.setattr(worker.httpx, "get", get)
+    assert client.post("/push", json=envelope({"job": "warm"})).status_code == 204
+    get.assert_called_once_with("https://api.example/health", timeout=15)
+    run_job.assert_not_called()
+
+
 def test_turn_in_order(st, llm, tg) -> None:
     assert client.post("/push", json=envelope(message())).status_code == 204
     ctx, text, history = llm.run_turn.call_args.args

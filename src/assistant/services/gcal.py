@@ -28,6 +28,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from google.cloud import firestore
+from google.cloud.firestore import FieldFilter
 
 from assistant.context import ToolContext
 
@@ -52,7 +53,10 @@ NO_ACCESS = (
 
 @cache
 def _db() -> firestore.Client:
-    return firestore.Client(project=os.environ.get("GCP_PROJECT_ID") or None)
+    return firestore.Client(
+        project=os.environ.get("GCP_PROJECT_ID") or None,
+        database=os.environ.get("FIRESTORE_DATABASE") or None,  # staging has its own
+    )
 
 
 @cache
@@ -119,7 +123,27 @@ def vincular(ctx: ToolContext, calendar_id: str) -> str:
         return "No pude verificar el calendario, intenta luego."
     ref.set({"gcal_id": cal}, merge=True)
     log.info("gcal_link")
-    return "✓ Google Calendar vinculado."
+    n = _backfill(ctx)
+    return f"✓ Google Calendar vinculado ({n} eventos copiados)."
+
+
+def _backfill(ctx: ToolContext) -> int:
+    """Mirror the upcoming active items created before linking; the ids are
+    deterministic, so a repeated /vincular only gets 409s."""
+    futuros = (
+        _db()
+        .collection("agenda")
+        .document(ctx.chat_id)
+        .collection("eventos")
+        .where(filter=FieldFilter("fin_utc", ">", ctx.ahora.astimezone(UTC)))
+    )
+    n = 0
+    for snap in futuros.stream():
+        evento = snap.to_dict() or {}
+        if evento.get("estado") == "activo":
+            espejo_crear(ctx, snap.id, evento)
+            n += 1
+    return n
 
 
 def _best_effort(

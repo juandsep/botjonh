@@ -108,6 +108,14 @@ resource "google_firestore_database" "db" {
   depends_on  = [google_project_service.apis]
 }
 
+# The staging services and the test bot write here, never to production data.
+resource "google_firestore_database" "staging" {
+  name        = "staging"
+  location_id = var.firestore_location
+  type        = "FIRESTORE_NATIVE"
+  depends_on  = [google_project_service.apis]
+}
+
 # Bucket for the budget-guard function source (no data bucket in this project).
 resource "google_storage_bucket" "functions" {
   name                        = "${var.project_id}-functions"
@@ -464,6 +472,9 @@ locals {
     digest  = { schedule = "30 7 * * *", label = "morning digest" }
     checkin = { schedule = "0 22 * * *", label = "list of the day's movements" }
     weekly  = { schedule = "0 20 * * 0", label = "weekly spend vs income" }
+    # Keeps the production instances alive (idle ones live ~15 min) so a message
+    # does not wait for two ~10 s cold starts; night stays scale-to-zero.
+    warm = { schedule = "*/10 6-23 * * *", label = "keep instances warm in waking hours" }
   }
 }
 
