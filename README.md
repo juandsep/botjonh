@@ -117,7 +117,7 @@ see [Configuration](#configuration).
 
    ```bash
    GCP_PROJECT_ID="$PROJECT_ID" uv run python -m assistant.admin add-owner <chat_id> <nombre>
-   for c in processed invites rate spend pending dash; do
+   for c in processed invites rate spend pending dash cron; do
      gcloud firestore fields ttls update expire_at --collection-group="$c" --enable-ttl --async
    done
    ```
@@ -180,10 +180,14 @@ per-user libraries move with
 `uv run python -m assistant.admin migrate-gifs <owner_chat_id>` (copies
 `gifs/{owner}` into `general`).
 
-**Scheduled messages** (America/Panama): 07:30 agenda of the day and
-yesterday's spend; 22:00 every movement of the day and the day's spend;
-Sunday 20:00 the week's spend, top categories and, against the month's income,
-the 20% to save and what is left per week.
+**Scheduled messages**, each in the user's own time zone (an hourly `tick` job
+in UTC picks who is due): 07:00 agenda of the day and yesterday's spend; 22:00
+every movement of the day and the day's spend; Sunday 22:00 the same list plus
+the week's spend, top categories and, against the month's income, the 20% to
+save and what is left per week, in one message. The 22:00 reports end with a
+24 h link to the dashboard. The ledger export (daily) and the backup (Sundays) run
+from 12:00 UTC: a `cron/{key}` marker records each success, and a failure is
+retried at the next hourly tick without holding back anyone's message.
 
 ## Finance ledger and reporting
 
@@ -195,7 +199,7 @@ append-only document per movement with `fecha` (ISO date), `monto` (string,
 `{update_id}-{i}`, ingreso `{update_id}-i0`, undo `{batch_id}-r{i}` (negative
 `reverso` copies; nothing is edited or deleted).
 
-Every morning the `digest` job exports the previous day's writes (America/Panama)
+Every day from 12:00 UTC the `tick` job exports the previous day's writes (America/Panama)
 to `gs://$BACKUP_BUCKET/ledger/mes=YYYY-MM/YYYY-MM-DD.csv` with the header
 `fecha,chat_id,tipo_mov,categoria,monto,moneda,nota,batch_id,tipo`. Files are
 create-only and kept forever; the weekly JSON backup lives under `backup/` with a

@@ -47,7 +47,7 @@ variable "monthly_budget_usd" {
 }
 
 variable "timezone" {
-  description = "IANA timezone for the scheduler jobs (e.g. America/Panama)."
+  description = "IANA timezone for the warm scheduler job (e.g. America/Panama)."
   type        = string
   default     = "America/Panama"
 }
@@ -469,12 +469,12 @@ resource "google_service_account_iam_member" "worker_acts_as_itself" {
 # Cloud Scheduler publishes directly to the cron topic (no HTTP endpoints).
 locals {
   jobs = {
-    digest  = { schedule = "30 7 * * *", label = "morning digest" }
-    checkin = { schedule = "0 22 * * *", label = "list of the day's movements" }
-    weekly  = { schedule = "0 20 * * 0", label = "weekly spend vs income" }
+    # Hourly in UTC: the worker sends each user's digest (07:00), daily list
+    # (22:00) and Sunday weekly at their own local time; exports/backups at 12 UTC.
+    tick = { schedule = "0 * * * *", time_zone = "Etc/UTC", label = "per-user local-time reports" }
     # Keeps the production instances alive (idle ones live ~15 min) so a message
     # does not wait for two ~10 s cold starts; night stays scale-to-zero.
-    warm = { schedule = "*/10 6-23 * * *", label = "keep instances warm in waking hours" }
+    warm = { schedule = "*/10 6-23 * * *", time_zone = var.timezone, label = "keep instances warm in waking hours" }
   }
 }
 
@@ -483,7 +483,7 @@ resource "google_cloud_scheduler_job" "job" {
   name        = "assistant-${each.key}"
   description = each.value.label
   schedule    = each.value.schedule
-  time_zone   = var.timezone
+  time_zone   = each.value.time_zone
 
   pubsub_target {
     topic_name = google_pubsub_topic.cron.id
