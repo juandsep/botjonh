@@ -18,6 +18,7 @@ import json
 import logging
 import time
 from datetime import datetime
+from functools import cache
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -55,6 +56,8 @@ VINCULAR_HINT = (
     "assistant-worker@jd-botjonh.iam.gserviceaccount.com (Hacer cambios en "
     "eventos) y envía /vincular <id>. En una cuenta personal el id es tu Gmail."
 )
+OWNER_COMMANDS = ("/invitar", "/usuarios")
+INVITAR_USAGE = "Uso: /invitar <nombre>. Crea un enlace de un uso, válido 24 h."
 LEDGER_COMMANDS = ("/ultimos", "/editar", "/anular", "/gif")
 REGISTROS = {"registrar_gasto": "gasto", "registrar_ingreso": "ingreso"}
 
@@ -169,6 +172,9 @@ def handle_update(msg: InboundMessage, settings: WorkerSettings) -> int:
             except httpx.HTTPError:
                 logger.warning("delete_failed update_id=%s", msg.update_id)
         _send(channel, msg, reply)
+        return ACK
+    if msg.text.startswith(OWNER_COMMANDS):
+        _send(channel, msg, *_owner_command(ctx, msg, settings))
         return ACK
     if msg.text.startswith(LEDGER_COMMANDS):
         _send(channel, msg, *_ledger_command(ctx, msg))
@@ -318,6 +324,36 @@ def _registro(channel: Telegram, msg: InboundMessage, reply: str) -> None:
         _send(channel, msg, reply)
 
 
+@cache
+def _bot_username(bot_token: str) -> str:
+    return Telegram(bot_token).username()
+
+
+def _owner_command(
+    ctx: ToolContext, msg: InboundMessage, settings: WorkerSettings
+) -> tuple[str, list[list[tuple[str, str]]] | None]:
+    """/invitar <nombre> (t.me deep link) and /usuarios (revoke buttons)."""
+    if ctx.rol != "owner":
+        return state.OWNER_ONLY, None
+    cmd, _, nombre = msg.text.strip().partition(" ")
+    nombre = nombre.strip()
+    if cmd.split("@")[0] == "/invitar":
+        if not nombre or len(nombre) > 40:
+            return INVITAR_USAGE, None
+        code = state.crear_invitacion(nombre)
+        logger.info("invite_created update_id=%s", msg.update_id)
+        link = f"https://t.me/{_bot_username(settings.telegram_bot_token)}?start={code}"
+        return f"Invitación para {nombre} (un uso, 24 h). Reenvíale:\n{link}", None
+    filas = state.usuarios()
+    texto = "\n".join(f"{u.get('nombre', '?')} ({u.get('rol', '?')})" for _, u in filas)
+    botones = [
+        [(f"Revocar a {u.get('nombre', '?')}", f"rv:{chat_id}")]
+        for chat_id, u in filas
+        if u.get("rol") == "beta"
+    ]
+    return texto or "Sin usuarios.", botones or None
+
+
 def _ledger_command(
     ctx: ToolContext, msg: InboundMessage
 ) -> tuple[str, list[list[tuple[str, str]]] | None]:
@@ -427,4 +463,8 @@ def _callback(
     elif action == "no":
         state.pop_pending(msg.chat_id, token)
         _send(channel, msg, "Cancelado.")
+    elif action == "rv":  # /usuarios revoke button
+        ok = ctx.rol == "owner" and state.revocar(token)
+        logger.info("user_revoked update_id=%s ok=%s", msg.update_id, ok)
+        _send(channel, msg, "✓ Acceso revocado." if ok else "No se pudo revocar.")
     return ACK
