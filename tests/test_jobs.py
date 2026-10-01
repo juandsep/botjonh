@@ -90,9 +90,9 @@ def test_checkin_lists_the_day(
     jobs.run_job("checkin")
     assert env.telegram.send_message.call_args.args[1] == (
         "Hoy (3):\n"
-        "−0.49 USD · café (2,000 COP)\n"
-        "−12.00 USD · uber\n"
-        "+1000.00 USD · salario\n"
+        "−0.49 USD · Café (2,000 COP)\n"
+        "−12.00 USD · Uber\n"
+        "+1000.00 USD · Salario\n"
         "Total gastos: 12.49 USD"
     )
 

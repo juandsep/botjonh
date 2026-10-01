@@ -89,6 +89,10 @@ def upsert_user(
     )
 
 
+def set_zona(chat_id: str, zona: str) -> None:
+    _doc("users", chat_id).set({"zona_horaria": zona}, merge=True)
+
+
 def list_chat_ids() -> list[str]:
     return [snap.id for snap in _db().collection("users").stream()]
 

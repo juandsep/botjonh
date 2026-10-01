@@ -744,3 +744,24 @@ def test_tablero_unconfigured_and_errors(monkeypatch, st, llm, tg) -> None:
     monkeypatch.setattr(state, "dash_token", MagicMock(side_effect=RuntimeError()))
     client.post("/push", json=envelope(message("/tablero")))
     assert sent_texts(tg) == ["Tablero no configurado.", worker.FAILED_REPLY]
+
+
+def test_ayuda_and_zona(st, llm, tg, monkeypatch) -> None:
+    set_zona = MagicMock()
+    monkeypatch.setattr(state, "set_zona", set_zona)
+    for text in (
+        "/ayuda",
+        "/zona America/Bogota",
+        "/zona Mars/Base",
+        "/zona UTC",
+        "/zona",
+    ):
+        client.post("/push", json=envelope(message(text)))
+    usage = worker.ZONA_USAGE.format(zona="America/Panama")
+    assert sent_texts(tg) == [
+        worker.WELCOME,
+        "✓ Zona horaria: America/Bogota.",
+        *[usage] * 3,
+    ]
+    set_zona.assert_called_once_with("42", "America/Bogota")
+    llm.run_turn.assert_not_called()

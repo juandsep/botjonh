@@ -105,6 +105,8 @@ see [Configuration](#configuration).
    vincular - vincular tu Google Calendar (instantáneo)
    invitar - (owner) invitar a alguien: /invitar Ana
    usuarios - (owner) ver y revocar usuarios
+   ayuda - qué puedo hacer
+   zona - tu zona horaria: /zona America/Bogota
    start - activar
    ```
 

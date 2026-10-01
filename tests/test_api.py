@@ -268,7 +268,7 @@ def test_tablero_renders_month(dash_db, caplog) -> None:
     assert "<b>985.25</b>" in body and "98.53%" in body
     assert "Meta 20%: 200.00 USD" in body
     assert "&lt;b&gt;x&lt;/b&gt;" in body and "<b>x</b>" not in body
-    assert "uber &amp; co" in body
+    assert "Uber &amp; co" in body
     assert "500.00" not in body and "7.00" not in body and "99.00" not in body
     assert body.count("<li>") == 3
     assert 'href="?mes=2026-08"' in body and 'href="?mes=2026-10"' in body
