@@ -64,7 +64,9 @@ def _weekly(ctx: ToolContext) -> str | None:
     lineas = [f"Semana {desde:%d/%m}–{hasta:%d/%m}: {total} USD"]
     top = sorted((kv for kv in gastos.items() if kv[1] > 0), key=lambda kv: -kv[1])
     if top:
-        lineas.append("Top: " + " · ".join(f"{c} {v}" for c, v in top[:3]))
+        lineas.append(
+            "Top: " + " · ".join(f"{ledger.etiqueta(c)} {v}" for c, v in top[:3])
+        )
     if ingresos <= 0:
         lineas.append("Sin ingresos este mes: registra uno (1000usd ingreso).")
         return "\n".join(lineas)
@@ -137,22 +139,42 @@ def _ctx(
     )
 
 
+def _once(state: Any, key: str, fn: Callable[[], object]) -> None:
+    """Run a global side effect once per key; a failure leaves the key unset,
+    so the next hourly tick retries it. Never blocks the users' messages."""
+    if state.cron_done(key):
+        return
+    try:
+        fn()
+    except Exception as e:
+        log.error(
+            "cron_failed job=%s error=%s", key.partition(":")[0], type(e).__name__
+        )
+        return
+    state.mark_cron(key)
+
+
 def run_job(name: str) -> None:
     if name != "tick" and name not in JOBS:
         raise ValueError(f"unknown job: {name}")
     settings = get_worker_settings()
     ahora = datetime.now(UTC)
-    daily = name == "tick" and ahora.hour == 12
-    if name == "weekly" or (daily and ahora.weekday() == 6):
-        # Before messaging: a failed backup raises, so Pub/Sub retries the job.
-        backup.run(settings)
-    if name == "digest" or daily:
-        # Before messaging, but best-effort: the weekly backup still has the data.
-        try:
-            backup.export_ledger(settings)
-        except Exception as e:
-            log.warning("ledger_export_failed error=%s", type(e).__name__)
     state = importlib.import_module("assistant.services.state")
+    if name == "tick" and ahora.hour >= 12:
+        # From 12:00 UTC on, until each one succeeds once (export daily, backup
+        # on Sundays): a failure or a missed tick is retried an hour later.
+        _once(state, f"export:{ahora:%Y-%m-%d}", lambda: backup.export_ledger(settings))
+        if ahora.weekday() == 6:
+            semana = ahora.isocalendar()
+            _once(
+                state,
+                f"backup:{semana.year}-W{semana.week}",
+                lambda: backup.run(settings),
+            )
+    if name == "weekly":
+        backup.run(settings)  # manual run: a failure raises
+    if name == "digest":
+        _once(state, f"export:{ahora:%Y-%m-%d}", lambda: backup.export_ledger(settings))
     telegram = Telegram(settings.telegram_bot_token)
     sent = failed = 0
     for chat_id in state.list_chat_ids():

@@ -22,6 +22,9 @@ def env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     state.list_chat_ids.return_value = ["42"]
     state.get_user.return_value = {"rol": "owner", "moneda": "USD"}
     state.get_preferences.return_value = {}
+    done: set[str] = set()  # cron markers
+    state.cron_done.side_effect = done.__contains__
+    state.mark_cron.side_effect = done.add
     monkeypatch.setitem(sys.modules, "assistant.services.state", state)
     telegram = MagicMock()
     monkeypatch.setattr(jobs, "Telegram", lambda token: telegram)
@@ -111,7 +114,7 @@ def test_weekly_backs_up_and_crosses_with_income(
     jobs.run_job("weekly")
     lines = env.telegram.send_message.call_args.args[1].splitlines()
     assert lines[0].startswith("Semana ") and lines[0].endswith(": 100.00 USD")
-    assert lines[1] == "Top: restaurantes 80.00 · transporte 20.00"
+    assert lines[1] == "Top: Restaurantes 80.00 · Transporte 20.00"
     assert lines[2].startswith("Sin ingresos este mes")
     monkeypatch.setattr(ledger, "total_ingresos", lambda *a: Decimal("1000.00"))
     jobs.run_job("weekly")
@@ -168,11 +171,13 @@ def test_digest_exports_before_messages_and_survives_failure(
     env.export.side_effect = lambda s: order.append("export")
     env.telegram.send_message.side_effect = lambda *a: order.append("send")
     monkeypatch.setattr(agenda, "agenda", lambda ctx, rango: ["x"])
-    jobs.run_job("digest")
-    assert order == ["export", "send"]
     env.export.side_effect = RuntimeError("gcs down")
+    jobs.run_job("digest")  # a failed export never blocks the message
+    assert order == ["send"]
+    env.export.side_effect = lambda s: order.append("export")
     jobs.run_job("digest")
-    assert env.telegram.send_message.call_count == 2
+    assert order == ["send", "export", "send"]
+    jobs.run_job("digest")  # already exported today
     jobs.run_job("checkin")
     assert env.export.call_count == 2  # only the digest exports
 
@@ -405,7 +410,7 @@ def test_tick_dashboard_line_absent(
     assert _sent(tick)["es"] == "agenda"
 
 
-def test_tick_side_effects_once_a_day_at_12_utc(
+def test_tick_side_effects_once_a_day_from_12_utc(
     tick: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     order: list[str] = []
@@ -418,10 +423,21 @@ def test_tick_side_effects_once_a_day_at_12_utc(
     _at(monkeypatch, 2026, 9, 30, 12)  # Wednesday: export only, before messages
     jobs.run_job("tick")
     assert order == ["export", "send"]
+    _at(monkeypatch, 2026, 9, 30, 13)  # done today: not again
     order.clear()
-    _at(monkeypatch, 2026, 10, 4, 12)  # Sunday: backup too
     jobs.run_job("tick")
-    assert order == ["backup", "export", "send"]
-    tick.backup.side_effect = RuntimeError("gcs down")  # Pub/Sub retries
-    with pytest.raises(RuntimeError):
-        jobs.run_job("tick")
+    assert "export" not in order
+    tick.backup.side_effect = RuntimeError("gcs down")
+    _at(monkeypatch, 2026, 10, 4, 12)  # Sunday: the backup fails, messages go out
+    order.clear()
+    jobs.run_job("tick")
+    assert order == ["export", "send"]
+    tick.backup.side_effect = lambda s: order.append("backup")
+    _at(monkeypatch, 2026, 10, 4, 15)  # retried at the next tick
+    order.clear()
+    jobs.run_job("tick")
+    assert order[:1] == ["backup"] and "export" not in order
+    _at(monkeypatch, 2026, 10, 4, 16)
+    order.clear()
+    jobs.run_job("tick")
+    assert "backup" not in order

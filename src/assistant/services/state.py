@@ -89,6 +89,14 @@ def upsert_user(
     )
 
 
+def cron_done(key: str) -> bool:
+    return _doc("cron", key).get().exists
+
+
+def mark_cron(key: str) -> None:
+    _doc("cron", key).set({"expire_at": _now() + timedelta(days=30)})
+
+
 def set_zona(chat_id: str, zona: str) -> None:
     _doc("users", chat_id).set({"zona_horaria": zona}, merge=True)
 
