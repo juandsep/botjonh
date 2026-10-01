@@ -37,7 +37,25 @@ app = FastAPI(title="assistant-worker")
 
 ACK = 204
 LIMIT_REPLY = "Llegaste al límite por ahora. Intenta más tarde."
-WELCOME = "Hola. Escríbeme gastos, ingresos o citas y yo los registro."
+WELCOME = """Hola 👋 Llevo tus gastos, ingresos y agenda. Escríbeme normal:
+
+💸 Gastos e ingresos (todo queda en USD; otras monedas se convierten con la TRM)
+• -12 almuerzo · 25000 cop mercado · pan 2, leche 3
+• +1500 salario (el + es ingreso) · un monto solo te pregunto
+• /ultimos, /editar 1 3usd, /anular 1 para corregir
+• /tablero: tus gastos del mes en la web
+
+📅 Agenda
+• reunión con Ana mañana 3pm · recuérdame pagar la luz el viernes 9am
+• /calendario: próximos 7 días · ¿qué tengo libre el jueves?
+• /vincular tu-correo@gmail.com: copia tus eventos a Google Calendar
+• /conectar: avisa choques con tu calendario
+
+🕙 Cada día a las 22:00 te envío el resumen del día, y el domingo el de la semana.
+Tu zona horaria: /zona America/Bogota
+
+/ayuda muestra esto de nuevo."""
+ZONA_USAGE = "Uso: /zona <zona IANA>, ej. /zona America/Bogota. Ahora: {zona}."
 TEXT_ONLY = "Por ahora solo entiendo texto."
 FAILED_REPLY = "No pude hacerlo, intenta de nuevo."
 GOOGLE_HINT = "Google Calendar: Otros calendarios → + → Desde URL, y pega el enlace."
@@ -153,7 +171,10 @@ def handle_update(msg: InboundMessage, settings: WorkerSettings) -> int:
     channel = Telegram(settings.telegram_bot_token)
     if msg.callback_query_id:
         return _callback(ctx, msg, msg.callback_query_id, channel)
-    if msg.text.startswith("/start"):
+    if msg.text.startswith("/zona"):
+        _send(channel, msg, _zona(ctx, msg))
+        return ACK
+    if msg.text.startswith(("/start", "/ayuda", "/help")):
         _send(channel, msg, WELCOME)
         return ACK
     if msg.animation_file_id:
@@ -327,6 +348,20 @@ def _registro(channel: Telegram, msg: InboundMessage, reply: str) -> None:
     tipo = {"−": "gasto", "+": "ingreso"}.get(reply[:1])
     if not (tipo and _gif(channel, msg, tipo)):
         _send(channel, msg, reply)
+
+
+def _zona(ctx: ToolContext, msg: InboundMessage) -> str:
+    """/zona America/Bogota: the time zone of the agenda and the reports."""
+    zona = msg.text.strip().partition(" ")[2].strip()
+    try:
+        if not zona or "/" not in zona:
+            raise ValueError
+        ZoneInfo(zona)
+    except (ValueError, KeyError):  # ZoneInfoNotFoundError is a KeyError
+        return ZONA_USAGE.format(zona=ctx.zona_horaria)
+    state.set_zona(ctx.chat_id, zona)
+    logger.info("zona_set update_id=%s", msg.update_id)
+    return f"✓ Zona horaria: {zona}."
 
 
 @cache

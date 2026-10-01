@@ -143,15 +143,29 @@ def _cifra(valor: Decimal) -> str:
     return f"{valor:,.0f}" if valor == valor.to_integral() else f"{valor:,.2f}"
 
 
+# Display names of the stored category keys; anything else gets a capital.
+ETIQUETAS = {
+    "supermercado": "Mercado",
+    "vivienda": "Arriendo",
+    "inversion": "Inversión",
+}
+
+
+def etiqueta(valor: str) -> str:
+    """ "supermercado" -> "Mercado", "pan" -> "Pan": for display only."""
+    return ETIQUETAS.get(valor) or valor[:1].upper() + valor[1:]
+
+
 def texto(d: dict, sep: str = " · ") -> str:
     """One movement as "−0.49 USD · café (2,000 COP)"; a reverso as its registro."""
     signo = "−" if d["tipo_mov"] == "gasto" else "+"
     texto = f"{signo}{abs(q(d['monto']))} USD"
-    etiqueta = d.get("nota") or d.get("categoria") or d.get("fuente")
-    if etiqueta:
-        texto += f"{sep}{etiqueta}"
+    label = d.get("nota") or d.get("categoria") or d.get("fuente")
+    if label:
+        texto += f"{sep}{etiqueta(label)}"
     if d.get("moneda_original", "USD") != "USD":
-        texto += f" ({_cifra(Decimal(d['monto_original']))} {d['moneda_original']})"
+        moneda = str(d["moneda_original"]).upper()
+        texto += f" ({_cifra(Decimal(d['monto_original']))} {moneda})"
     return texto
 
 

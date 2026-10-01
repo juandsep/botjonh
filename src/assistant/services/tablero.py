@@ -15,6 +15,11 @@ from html import escape
 
 from assistant.services import ledger
 
+
+def _label(valor: str | None) -> str:
+    return ledger.etiqueta(valor or "")
+
+
 META = Decimal("0.20")  # savings target, same 20% as the weekly job
 ULTIMOS = 15
 MESES = (
@@ -99,7 +104,7 @@ def render(chat_id: str, mes: date) -> str:
     tope_cat = max((v for _, v in cats), default=Decimal(0))
     filas_cat = (
         "".join(
-            f'<div class="row"><span>{escape(c)}</span><div class="track">'
+            f'<div class="row"><span>{escape(_label(c))}</span><div class="track">'
             f'<div class="fill" style="width:{_pct(v, tope_cat):.1f}%"></div></div>'
             f'<span class="num">{_usd(v)}</span></div>'
             for c, v in cats
@@ -120,7 +125,7 @@ def render(chat_id: str, mes: date) -> str:
     filas_mov = (
         "".join(
             f"<li><span>{date.fromisoformat(d['fecha']):%d/%m} "
-            f"{escape(d.get('nota') or d.get('categoria') or d.get('fuente') or '')}"
+            f"{escape(_label(d.get('nota') or d.get('categoria') or d.get('fuente')))}"
             f'</span><span class="num {"in" if d["tipo_mov"] == "ingreso" else "out"}">'
             f"{'+' if d['tipo_mov'] == 'ingreso' else '−'}"
             f"{_usd(abs(ledger.q(d['monto'])))}</span></li>"

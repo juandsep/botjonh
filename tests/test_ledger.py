@@ -46,7 +46,7 @@ BASE = "ledger/42/movimientos"
 @respx.mock  # USD: any HTTP call would fail as unmatched
 def test_gasto_writes_decimal_strings(db: FakeDB, state: MagicMock) -> None:
     out = ledger.registrar_gasto(make_ctx(), ITEMS, "USD", date(2026, 9, 29))
-    assert out == "−2.00 USD · pan; −3.01 USD · supermercado"
+    assert out == "−2.00 USD · Pan; −3.01 USD · Mercado"
     assert sorted(db.store) == [f"{BASE}/100-0", f"{BASE}/100-1"]
     assert db.store[f"{BASE}/100-0"] == {
         "fecha": "2026-09-29",
@@ -85,7 +85,7 @@ def test_ingreso_idempotent(db: FakeDB, state: MagicMock) -> None:
         out = ledger.registrar_ingreso(
             make_ctx(), Decimal("1000"), "USD", "salario", date(2026, 9, 1), "sep"
         )
-    assert out == "+1000.00 USD · sep"
+    assert out == "+1000.00 USD · Sep"
     assert list(db.store) == [f"{BASE}/100-i0"]
     doc = db.store[f"{BASE}/100-i0"]
     assert (doc["fuente"], doc["tipo_mov"], doc["nota"]) == (
@@ -237,7 +237,7 @@ def test_gasto_in_cop_converts_with_trm(db: FakeDB, state: MagicMock) -> None:
     route = respx.get(TRM).mock(return_value=trm())
     items = [{"monto": 2000, "categoria": "", "nota": "café"}]
     out = ledger.registrar_gasto(make_ctx(), items, "COP", date(2026, 9, 29))
-    assert out == "−0.49 USD · café (2,000 COP)"
+    assert out == "−0.49 USD · Café (2,000 COP)"
     params = route.calls.last.request.url.params
     assert params["$where"] == "vigenciadesde <= '2026-09-29T00:00:00'"
     assert (params["$order"], params["$limit"]) == ("vigenciadesde DESC", "1")
@@ -340,9 +340,9 @@ def test_ultimos_lists_newest_first_and_skips_reversed(
     assert ledger.ultimos_texto(make_ctx()) == "Sin movimientos."
     seed(db)
     assert ledger.ultimos_texto(make_ctx()) == (
-        "1) 30/09 −0.50 USD café (2,000 COP)\n"
-        "2) 29/09 +900.00 USD salario\n"
-        "3) 28/09 −2.00 USD pan"
+        "1) 30/09 −0.50 USD Café (2,000 COP)\n"
+        "2) 29/09 +900.00 USD Salario\n"
+        "3) 28/09 −2.00 USD Pan"
     )
     primero = ledger.ultimos(make_ctx(), 1)
     assert primero == [
@@ -358,7 +358,7 @@ def test_ultimos_lists_newest_first_and_skips_reversed(
             "categoria": "otros",
         }
     ]
-    assert ledger.anular(make_ctx(10), 2) == "✓ anulado: +900.00 USD · salario"
+    assert ledger.anular(make_ctx(10), 2) == "✓ anulado: +900.00 USD · Salario"
     ledger.deshacer(make_ctx(11), "g1")
     assert [m["id"] for m in ledger.ultimos(make_ctx())] == ["3-0"]
     # Legacy reversos (no ``reversa``) cancel their whole batch.
@@ -370,7 +370,7 @@ def test_editar_appends_reverso_and_new_registro(db: FakeDB, state: MagicMock) -
     seed(db)
     before = copy.deepcopy(db.store)
     out = ledger.editar(make_ctx(20), 1, monto=Decimal(4000), categoria="restaurantes")
-    assert out == "✓ editado: −1.00 USD · café (4,000 COP)"
+    assert out == "✓ editado: −1.00 USD · Café (4,000 COP)"
     assert {k: db.store[k] for k in before} == before  # originals untouched
     rev = db.store[f"{BASE}/3-0-x"]
     assert (rev["tipo"], rev["reversa"], rev["monto"], rev["monto_original"]) == (
@@ -400,9 +400,9 @@ def test_editar_appends_reverso_and_new_registro(db: FakeDB, state: MagicMock) -
     }
     # Edit the ingreso's note only; its amount stays.
     out = ledger.editar(make_ctx(21), 2, nota="bono")
-    assert out == "✓ editado: +900.00 USD · bono"
+    assert out == "✓ editado: +900.00 USD · Bono"
     assert ledger.editar(make_ctx(22), 1, categoria="") == (
-        "✓ editado: +900.00 USD · bono"
+        "✓ editado: +900.00 USD · Bono"
     )
     assert db.store[f"{BASE}/22-e0"]["fuente"] == ""
 
@@ -419,9 +419,9 @@ def test_edit_errors(db: FakeDB, state: MagicMock) -> None:
     )
     assert ledger.editar(make_ctx(30), 1, moneda="XYZ") == "Moneda no soportada."
     n = len(db.store)
-    assert ledger.anular(make_ctx(31)) == "✓ anulado: −0.50 USD · café (2,000 COP)"
+    assert ledger.anular(make_ctx(31)) == "✓ anulado: −0.50 USD · Café (2,000 COP)"
     assert len(db.store) == n + 1
-    assert ledger.anular(make_ctx(31)) == "✓ anulado: −0.50 USD · café (2,000 COP)"
+    assert ledger.anular(make_ctx(31)) == "✓ anulado: −0.50 USD · Café (2,000 COP)"
     assert len(db.store) == n + 1  # retry
 
 
@@ -463,3 +463,9 @@ def test_clave_of_the_update(db: FakeDB, state: MagicMock) -> None:
     assert ledger.clave("42", 100, "gasto") == "supermercado"
     assert ledger.clave("42", 101, "ingreso") == "salario"
     assert ledger.clave("42", 102, "gasto") == ""
+
+
+def test_etiqueta_display_names() -> None:
+    assert ledger.etiqueta("supermercado") == "Mercado"
+    assert ledger.etiqueta("vivienda") == "Arriendo"
+    assert ledger.etiqueta("luz") == "Luz" and ledger.etiqueta("") == ""
