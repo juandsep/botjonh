@@ -100,7 +100,7 @@ see [Configuration](#configuration).
    tablero - ver tus gastos en la web (enlace 1 h)
    editar - editar un movimiento: /editar 1 3usd
    anular - anular un movimiento: /anular 1
-   gif - guardar GIFs de reacción
+   gif - catálogo de GIFs de reacción (solo owner)
    conectar - conectar tu calendario (enlace iCal secreto)
    vincular - vincular tu Google Calendar (instantáneo)
    invitar - (owner) invitar a alguien: /invitar Ana
@@ -158,11 +158,25 @@ to the LLM.
   the chat_id and `expire_at`.
 - In free text the LLM does the same: "el último era 3 dólares, no 5".
 
-**Reaction GIFs.** Send a GIF with the caption `gasto` or `ingreso` (or reply
-to a GIF with `/gif gasto`) to save it (`gifs/{chat_id}`, 20 per type). After
-each quick registration the bot answers with a random one of that type and no
-text; the text line (`−0.49 USD · café (2,000 COP)`) is only the fallback when
-no GIF is stored or sending it fails. `/gif` shows usage and counts.
+**Reaction GIFs.** One shared catalog, curated by the owner, answers every
+user: `gif_catalog/{tipo}` (`gasto`|`ingreso`) maps a clave (a gasto category
+such as `restaurantes`, an ingreso fuente such as `salario`, or `general`) to
+up to 20 Telegram file_ids. After each registration the bot answers with a
+random GIF of the movement's categoria/fuente, else of `general`, and no text;
+the text line (`−0.49 USD · café (2,000 COP)`) is only the fallback when no GIF
+fits or sending it fails. Owner only (anyone else gets a one-line refusal):
+
+- Send a GIF with the caption `gasto`, `gasto restaurantes`, `ingreso` or
+  `ingreso salario` (no clave = `general`), or reply to a GIF with
+  `/gif gasto restaurantes`.
+- `/gif borrar` replying to a GIF removes it from every clave.
+- `/gif` alone lists the counts per tipo and clave.
+
+Telegram file_ids are per bot, so staging (its own Firestore database and bot)
+and production keep separate catalogs; curate each from its own bot. Old
+per-user libraries move with
+`uv run python -m assistant.admin migrate-gifs <owner_chat_id>` (copies
+`gifs/{owner}` into `general`).
 
 **Scheduled messages** (America/Panama): 07:30 agenda of the day and
 yesterday's spend; 22:00 every movement of the day and the day's spend;

@@ -13,10 +13,13 @@ Collections (Firestore native):
   no nested arrays).
 - ``ics_tokens/{token}``: chat_id of a private ICS feed; ``users.ics_token``
   points back so the link can be shown again or rotated. Never log tokens.
-- ``gifs/{chat_id}``: arrays ``gasto``/``ingreso`` of Telegram file_ids (max 20
-  each) sent as a reaction after a registration. Never log file_ids.
 - ``dash/{token}``: chat_id, ``expire_at`` (1 h) of a web dashboard link.
   Never log tokens.
+- ``gif_catalog/{tipo}`` (gasto|ingreso): one shared, owner-curated map
+  ``{clave: [file_id, ...]}`` (max 20 each, newest last). ``clave`` is a gasto
+  categoria, an ingreso fuente or ``general`` (the fallback). A random one is
+  sent as a reaction after a registration. File ids are per bot, so staging and
+  production keep separate catalogs. Never log file_ids.
 
 Set a Firestore TTL policy on ``expire_at`` for processed, invites, rate, spend,
 pending and dash. Doc ids contain chat_ids: never log them.
@@ -275,23 +278,59 @@ def chat_for_dash_token(token: str) -> str | None:
     return str(data["chat_id"])
 
 
-# --- reaction GIFs ----------------------------------------------------------------
+# --- reaction GIF catalog -------------------------------------------------------
+
+GIF_TIPOS = ("gasto", "ingreso")
+GIF_GENERAL = "general"
+_CLAVE = re.compile(r"\w{1,24}")  # letters (ñ, accents), digits and _
 
 
-def gifs(chat_id: str) -> dict[str, list[str]]:
-    data = _data(_doc("gifs", chat_id).get()) or {}
-    return {t: list(data.get(t, [])) for t in ("gasto", "ingreso")}
+def valid_clave(clave: str) -> bool:
+    return bool(_CLAVE.fullmatch(clave)) and clave == clave.lower()
 
 
-def add_gif(chat_id: str, tipo: str, file_id: str) -> None:
+def gif_catalog(tipo: str) -> dict[str, list[str]]:
+    data = _data(_doc("gif_catalog", tipo).get()) or {}
+    return {k: list(v) for k, v in data.items()}
+
+
+def add_gif(tipo: str, clave: str, file_id: str) -> None:
     """Newest last; a repeated file_id moves to the end; keeps the last 20."""
-    ids = [f for f in gifs(chat_id)[tipo] if f != file_id] + [file_id]
-    _doc("gifs", chat_id).set({tipo: ids[-GIF_MAX:]}, merge=True)
+    catalog = gif_catalog(tipo)
+    ids = [f for f in catalog.get(clave, []) if f != file_id] + [file_id]
+    # ponytail: read-modify-write without a transaction; one curator (the owner).
+    _doc("gif_catalog", tipo).set({**catalog, clave: ids[-GIF_MAX:]})
 
 
-def random_gif(chat_id: str, tipo: str) -> str | None:
-    ids = gifs(chat_id).get(tipo) or []
+def remove_gif(file_id: str) -> int:
+    """Drop a file_id from every tipo and clave; returns how many were removed."""
+    removed = 0
+    for tipo in GIF_TIPOS:
+        catalog = gif_catalog(tipo)
+        kept = {k: [f for f in v if f != file_id] for k, v in catalog.items()}
+        n = sum(map(len, catalog.values())) - sum(map(len, kept.values()))
+        if n:
+            _doc("gif_catalog", tipo).set({k: v for k, v in kept.items() if v})
+            removed += n
+    return removed
+
+
+def random_gif(tipo: str, clave: str) -> str | None:
+    """A GIF of the movement's clave, else of ``general``; None when both empty."""
+    catalog = gif_catalog(tipo)
+    ids = catalog.get(clave) or catalog.get(GIF_GENERAL) or []
     return secrets.choice(ids) if ids else None
+
+
+def migrate_gifs(chat_id: str) -> int:
+    """Copy a chat's old ``gifs/{chat_id}`` lists into ``general``."""
+    old = _data(_doc("gifs", chat_id).get()) or {}
+    n = 0
+    for tipo in GIF_TIPOS:
+        for file_id in old.get(tipo, []):
+            add_gif(tipo, GIF_GENERAL, file_id)
+            n += 1
+    return n
 
 
 # --- owner tools -----------------------------------------------------------------

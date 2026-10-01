@@ -42,9 +42,11 @@ TEXT_ONLY = "Por ahora solo entiendo texto."
 FAILED_REPLY = "No pude hacerlo, intenta de nuevo."
 GOOGLE_HINT = "Google Calendar: Otros calendarios → + → Desde URL, y pega el enlace."
 GIF_USAGE = (
-    "Envía un GIF con el texto gasto o ingreso, o responde a uno con /gif gasto."
-    " Tienes {gasto} de gasto y {ingreso} de ingreso."
+    "Envía un GIF con el texto gasto, gasto restaurantes, ingreso o ingreso "
+    "salario (sin clave va a general), o responde a uno con /gif gasto "
+    "restaurantes. /gif borrar respondiendo a un GIF lo quita."
 )
+GIF_OWNER_ONLY = "Solo el owner cura los GIFs."
 EDIT_USAGE = "Uso: /editar <n> <monto>[moneda], ej. /editar 1 3usd"
 ANULAR_USAGE = "Uso: /anular <n>, ej. /anular 1"
 CONECTAR_HINT = (
@@ -155,7 +157,7 @@ def handle_update(msg: InboundMessage, settings: WorkerSettings) -> int:
         _send(channel, msg, WELCOME)
         return ACK
     if msg.animation_file_id:
-        _send(channel, msg, _save_gif(msg, msg.caption, msg.animation_file_id))
+        _send(channel, msg, _gif_command(ctx, msg, msg.caption, msg.animation_file_id))
         return ACK
     if not msg.text.strip():
         _send(channel, msg, TEXT_ONLY)
@@ -366,7 +368,7 @@ def _ledger_command(
     cmd, _, arg = msg.text.strip().partition(" ")
     cmd, arg = cmd.split("@")[0], arg.strip()
     if cmd == "/gif":
-        return _save_gif(msg, arg, msg.reply_animation_file_id), None
+        return _gif_command(ctx, msg, arg, msg.reply_animation_file_id), None
     n, _, rest = arg.partition(" ")
     usage = ANULAR_USAGE if cmd == "/anular" else EDIT_USAGE
     args: dict[str, Any] = {"indice": int(n)} if n.isdecimal() else {}
@@ -409,20 +411,46 @@ def _tablero(ctx: ToolContext, msg: InboundMessage, settings: WorkerSettings) ->
     return f"{settings.api_url}/tablero/{token}\nVálido 1 h."
 
 
-def _save_gif(msg: InboundMessage, tipo: str, file_id: str | None) -> str:
-    tipo = quick.norm(tipo.strip())
-    if file_id and tipo in ("gasto", "ingreso"):
-        state.add_gif(msg.chat_id, tipo, file_id)
+def gif_target(text: str) -> tuple[str, str] | None:
+    """``gasto`` -> (gasto, general); ``ingreso salario`` -> (ingreso, salario)."""
+    words = text.strip().lower().split()
+    if not 1 <= len(words) <= 2 or quick.norm(words[0]) not in state.GIF_TIPOS:
+        return None
+    clave = words[1] if len(words) == 2 else state.GIF_GENERAL
+    return (quick.norm(words[0]), clave) if state.valid_clave(clave) else None
+
+
+def _gif_command(
+    ctx: ToolContext, msg: InboundMessage, arg: str, file_id: str | None
+) -> str:
+    """Owner-only curation of the shared catalog: add, borrar, list counts."""
+    if ctx.rol != "owner":
+        return GIF_OWNER_ONLY
+    if file_id and arg.strip().lower() == "borrar":
+        removed = state.remove_gif(file_id)
+        logger.info("gif_removed update_id=%s", msg.update_id)
+        return "✓ GIF borrado." if removed else "Ese GIF no está en el catálogo."
+    target = gif_target(arg)
+    if file_id and target:
+        state.add_gif(*target, file_id)
         logger.info("gif_saved update_id=%s", msg.update_id)
-        return f"✓ GIF guardado para {tipo}."
-    counts = {t: len(ids) for t, ids in state.gifs(msg.chat_id).items()}
-    return GIF_USAGE.format(**counts)
+        return f"✓ GIF guardado para {target[0]} {target[1]}."
+    lines = [GIF_USAGE]
+    for tipo in state.GIF_TIPOS:
+        counts = ", ".join(
+            f"{k} {len(v)}" for k, v in sorted(state.gif_catalog(tipo).items())
+        )
+        lines.append(f"{tipo}: {counts or 'vacío'}")
+    return "\n".join(lines)
 
 
 def _gif(channel: Telegram, msg: InboundMessage, tipo: str) -> bool:
-    """Best effort reaction GIF after a registration; False when none was sent."""
+    """Best effort reaction GIF after a registration; False when none was sent.
+    The movement's categoria/fuente picks the GIFs, else ``general``."""
     try:
-        file_id = state.random_gif(msg.chat_id, tipo)
+        ledger = importlib.import_module("assistant.services.ledger")
+        clave = ledger.clave(msg.chat_id, msg.update_id, tipo)
+        file_id = state.random_gif(tipo, clave)
         if file_id:
             channel.send_animation(msg.chat_id, file_id)
             return True

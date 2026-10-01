@@ -60,7 +60,10 @@ def st(monkeypatch):
     m.llm_spend_today.return_value = Decimal("0")
     m.get_history.return_value = []
     m.random_gif.return_value = None
-    m.gifs.return_value = {"gasto": ["a", "b"], "ingreso": []}
+    m.gif_catalog.side_effect = lambda tipo: (
+        {"general": ["a"], "restaurantes": ["b", "c"]} if tipo == "gasto" else {}
+    )
+    m.remove_gif.return_value = 1
     m.create_pending.return_value = "t" * 22
     for name in (
         "get_user",
@@ -72,7 +75,8 @@ def st(monkeypatch):
         "pop_pending",
         "random_gif",
         "add_gif",
-        "gifs",
+        "remove_gif",
+        "gif_catalog",
         "create_pending",
     ):
         monkeypatch.setattr(state, name, getattr(m, name))
@@ -371,6 +375,7 @@ def ledger(monkeypatch):
         ultimos_texto=MagicMock(return_value="1. cafe 2.00 USD"),
         editar=MagicMock(return_value="✓ editado"),
         anular=MagicMock(return_value="✓ anulado"),
+        clave=MagicMock(return_value=""),
     )
 
 
@@ -384,6 +389,7 @@ def animations(tg) -> list[dict]:
 
 def test_quick_gasto_skips_llm_and_sends_gif(st, llm, tg, ledger) -> None:
     st.random_gif.return_value = "gif1"
+    ledger.clave.return_value = "restaurantes"
     assert (
         client.post("/push", json=envelope(message("2000 cop cafe"))).status_code == 204
     )
@@ -397,7 +403,8 @@ def test_quick_gasto_skips_llm_and_sends_gif(st, llm, tg, ledger) -> None:
     }
     assert sent_texts(tg) == []  # the GIF is the whole answer
     assert animations(tg) == [{"chat_id": "42", "animation": "gif1"}]
-    st.random_gif.assert_called_once_with("42", "gasto")
+    ledger.clave.assert_called_once_with("42", 9, "gasto")
+    st.random_gif.assert_called_once_with("gasto", "restaurantes")
     llm.run_turn.assert_not_called()
     st.check_rate.assert_not_called()
     st.add_llm_spend.assert_not_called()
@@ -435,16 +442,17 @@ def test_quick_errors_never_5xx(st, llm, tg, ledger, caplog) -> None:
     llm.run_turn.assert_not_called()
 
 
-def test_llm_registration_sends_gif(st, llm, tg) -> None:
+def test_llm_registration_sends_gif(st, llm, tg, ledger) -> None:
     st.random_gif.return_value = "gif1"
+    ledger.clave.return_value = "salario"
     llm.result.keyboard = None
     llm.result.tools = ["registrar_ingreso"]
     client.post("/push", json=envelope(message("me pagaron el freelance")))
-    st.random_gif.assert_called_once_with("42", "ingreso")
+    st.random_gif.assert_called_once_with("ingreso", "salario")
     assert animations(tg) == [{"chat_id": "42", "animation": "gif1"}]
     llm.result.keyboard = [[("Sí", "ok:t")]]  # pending confirmation: no GIF yet
     llm.result.tools = ["registrar_gasto"]
-    client.post("/push", json=envelope(message("vuelo de 900")))
+    client.post("/push", json=envelope(message("vuelo de 900 ayer")))
     assert len(animations(tg)) == 1
 
 
@@ -502,29 +510,80 @@ def test_anular_asks_then_runs_on_ok(monkeypatch, st, llm, tg, ledger) -> None:
     assert sent_texts(tg)[1:] == [worker.ANULAR_USAGE, "✓ anulado"]
 
 
-def test_gif_saved_from_caption_and_reply(st, llm, tg) -> None:
-    gif = {"update_id": 11, "message": {"chat": {"id": 42}, "caption": "Gasto"}}
+def gif_update(caption: str | None = None) -> dict:
+    gif = {"update_id": 11, "message": {"chat": {"id": 42}}}
     gif["message"]["animation"] = {"file_id": "g1"}
-    client.post("/push", json=envelope(gif))
-    reply = message("/gif ingreso")
+    if caption is not None:
+        gif["message"]["caption"] = caption
+    return gif
+
+
+def test_gif_saved_from_caption_and_reply(st, llm, tg) -> None:
+    client.post("/push", json=envelope(gif_update("Gasto")))
+    client.post("/push", json=envelope(gif_update("gasto Restaurantes")))
+    reply = message("/gif ingreso salario")
     reply["message"]["reply_to_message"] = {"animation": {"file_id": "g2"}}
     client.post("/push", json=envelope(reply))
+    for bad in ("gasto comida extra", "regalo", "gasto a-b"):
+        client.post("/push", json=envelope(gif_update(bad)))
+    client.post("/push", json=envelope(gif_update()))
     client.post("/push", json=envelope(message("/gif")))
-    no_caption = {"update_id": 12, "message": {"chat": {"id": 42}}}
-    no_caption["message"]["animation"] = {"file_id": "g3"}
-    client.post("/push", json=envelope(no_caption))
     assert [c.args for c in st.add_gif.call_args_list] == [
-        ("42", "gasto", "g1"),
-        ("42", "ingreso", "g2"),
+        ("gasto", "general", "g1"),
+        ("gasto", "restaurantes", "g1"),
+        ("ingreso", "salario", "g2"),
     ]
-    usage = worker.GIF_USAGE.format(gasto=2, ingreso=0)
+    listing = f"{worker.GIF_USAGE}\ngasto: general 1, restaurantes 2\ningreso: vacío"
     assert sent_texts(tg) == [
-        "✓ GIF guardado para gasto.",
-        "✓ GIF guardado para ingreso.",
-        usage,
-        usage,
+        "✓ GIF guardado para gasto general.",
+        "✓ GIF guardado para gasto restaurantes.",
+        "✓ GIF guardado para ingreso salario.",
+        *[listing] * 5,
     ]
     llm.run_turn.assert_not_called()
+
+
+def test_gif_borrar(st, llm, tg, caplog) -> None:
+    reply = message("/gif borrar")
+    reply["message"]["reply_to_message"] = {"animation": {"file_id": "g9"}}
+    client.post("/push", json=envelope(reply))
+    st.remove_gif.return_value = 0
+    client.post("/push", json=envelope(reply))
+    st.remove_gif.assert_called_with("g9")
+    assert sent_texts(tg) == ["✓ GIF borrado.", "Ese GIF no está en el catálogo."]
+    assert "gif_removed" in caplog.text and "g9" not in caplog.text
+    st.add_gif.assert_not_called()
+
+
+def test_gif_curation_is_owner_only(st, llm, tg) -> None:
+    st.get_user.return_value = {**st.get_user.return_value, "rol": "beta"}
+    client.post("/push", json=envelope(gif_update("gasto")))
+    reply = message("/gif borrar")
+    reply["message"]["reply_to_message"] = {"animation": {"file_id": "g1"}}
+    client.post("/push", json=envelope(reply))
+    client.post("/push", json=envelope(message("/gif")))
+    assert sent_texts(tg) == [worker.GIF_OWNER_ONLY] * 3
+    st.add_gif.assert_not_called()
+    st.remove_gif.assert_not_called()
+    st.gif_catalog.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("gasto", ("gasto", "general")),
+        (" Ingreso  Salario ", ("ingreso", "salario")),
+        ("gasto inversión", ("gasto", "inversión")),
+        ("gasto año_2", ("gasto", "año_2")),
+        ("", None),
+        ("regalo", None),
+        ("gasto a-b", None),
+        ("gasto " + "x" * 25, None),
+        ("gasto comida extra", None),
+    ],
+)
+def test_gif_target(text, expected) -> None:
+    assert worker.gif_target(text) == expected
 
 
 # --- reminders from Cloud Tasks --------------------------------------------------

@@ -208,6 +208,18 @@ def registrar_ingreso(
     return texto(doc)
 
 
+def clave(chat_id: str, update_id: int, tipo_mov: str) -> str:
+    """categoria (gasto) or fuente (ingreso) registered by this update, else "".
+
+    Doc ids are deterministic, so every path (quick, LLM, buttons) reads the
+    same doc; a multi-item gasto uses its first item.
+    """
+    doc_id = f"{update_id}-0" if tipo_mov == "gasto" else f"{update_id}-i0"
+    snap = _col(chat_id).document(doc_id).get()
+    data = snap.to_dict() if snap.exists else {}
+    return str(data.get("categoria") or data.get("fuente") or "").strip().lower()
+
+
 def _reverso(ctx: ToolContext, doc_id: str, d: dict) -> dict:
     """Negative copy of a registro; ``reversa`` names the registro it cancels."""
     rev = {**d, "monto": str(-q(d["monto"])), "update_id": ctx.update_id}
