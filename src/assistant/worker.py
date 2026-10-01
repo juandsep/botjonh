@@ -176,6 +176,9 @@ def handle_update(msg: InboundMessage, settings: WorkerSettings) -> int:
     if msg.text.startswith(OWNER_COMMANDS):
         _send(channel, msg, *_owner_command(ctx, msg, settings))
         return ACK
+    if msg.text.startswith("/tablero"):
+        _send(channel, msg, _tablero(ctx, msg, settings))
+        return ACK
     if msg.text.startswith(LEDGER_COMMANDS):
         _send(channel, msg, *_ledger_command(ctx, msg))
         return ACK
@@ -389,6 +392,21 @@ def _ledger_command(
         )
         return FAILED_REPLY, None
     return reply, tools.buttons(token) if token else None
+
+
+def _tablero(ctx: ToolContext, msg: InboundMessage, settings: WorkerSettings) -> str:
+    """/tablero: a 1 h link to the month's dashboard on assistant-api."""
+    if not settings.api_url:
+        return "Tablero no configurado."
+    try:
+        token = state.dash_token(ctx.chat_id)
+    except Exception as exc:
+        logger.error(
+            "command_failed update_id=%s error=%s", msg.update_id, type(exc).__name__
+        )
+        return FAILED_REPLY
+    logger.info("dash_link update_id=%s", msg.update_id)
+    return f"{settings.api_url}/tablero/{token}\nVálido 1 h."
 
 
 def _save_gif(msg: InboundMessage, tipo: str, file_id: str | None) -> str:

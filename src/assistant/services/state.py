@@ -15,9 +15,11 @@ Collections (Firestore native):
   points back so the link can be shown again or rotated. Never log tokens.
 - ``gifs/{chat_id}``: arrays ``gasto``/``ingreso`` of Telegram file_ids (max 20
   each) sent as a reaction after a registration. Never log file_ids.
+- ``dash/{token}``: chat_id, ``expire_at`` (1 h) of a web dashboard link.
+  Never log tokens.
 
-Set a Firestore TTL policy on ``expire_at`` for processed, invites, rate, spend
-and pending. Doc ids contain chat_ids: never log them.
+Set a Firestore TTL policy on ``expire_at`` for processed, invites, rate, spend,
+pending and dash. Doc ids contain chat_ids: never log them.
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ HISTORY_TURNS = 6
 PENDING_TTL = timedelta(minutes=10)
 INVITE_TTL = timedelta(hours=24)
 PROCESSED_TTL = timedelta(days=7)
+DASH_TTL = timedelta(hours=1)
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{22}")  # secrets.token_urlsafe(16)
 GIF_MAX = 20
 _ICS_TOKEN = re.compile(r"[A-Za-z0-9_-]{32}")  # secrets.token_urlsafe(24)
@@ -250,6 +253,26 @@ def chat_for_ics_token(token: str) -> str | None:
     if not _ICS_TOKEN.fullmatch(token):
         return None
     return (_data(_doc("ics_tokens", token).get()) or {}).get("chat_id")
+
+
+# --- web dashboard tokens -------------------------------------------------------
+
+
+def dash_token(chat_id: str) -> str:
+    """A new 1 h link to the chat's dashboard; the TTL policy deletes it later."""
+    token = secrets.token_urlsafe(24)
+    _doc("dash", token).set({"chat_id": chat_id, "expire_at": _now() + DASH_TTL})
+    return token
+
+
+def chat_for_dash_token(token: str) -> str | None:
+    """Owner chat of a live dashboard token. The format is checked first."""
+    if not _ICS_TOKEN.fullmatch(token):
+        return None
+    data = _data(_doc("dash", token).get())
+    if not data or data["expire_at"] <= _now():  # TTL deletion lags up to a day
+        return None
+    return str(data["chat_id"])
 
 
 # --- reaction GIFs ----------------------------------------------------------------

@@ -362,10 +362,16 @@ def editar(
 
 def del_dia(chat_id: str, dia: date) -> list[dict]:
     """Registros of one day still in force (not reversed), oldest first."""
-    fin = (dia + timedelta(days=1)).isoformat()
+    return vigentes(chat_id, dia, dia)
+
+
+def vigentes(chat_id: str, desde: date, hasta: date) -> list[dict]:
+    """Registros in the inclusive range still in force (not reversed), oldest
+    first. A reverso keeps its registro's fecha, so both fall in the range."""
+    fin = (hasta + timedelta(days=1)).isoformat()
     consulta = (
         _col(chat_id)
-        .where(filter=FieldFilter("fecha", ">=", dia.isoformat()))
+        .where(filter=FieldFilter("fecha", ">=", desde.isoformat()))
         .where(filter=FieldFilter("fecha", "<", fin))
     )
     docs = [(s.id, s.to_dict()) for s in consulta.stream()]
