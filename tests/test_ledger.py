@@ -453,3 +453,13 @@ def test_del_dia_skips_reversed_rows_and_batches(db: FakeDB, state: MagicMock) -
     ledger.deshacer(make_ctx(update_id=103))  # reverses the whole batch
     assert [d["monto"] for d in ledger.del_dia("42", dia)] == ["900.00"]
     assert ledger.del_dia("41", dia) == []
+
+
+@respx.mock
+def test_clave_of_the_update(db: FakeDB, state: MagicMock) -> None:
+    ledger.registrar_gasto(make_ctx(), ITEMS, "USD", date(2026, 9, 29))
+    ctx = make_ctx(update_id=101)
+    ledger.registrar_ingreso(ctx, Decimal(5), "USD", " Salario", date(2026, 9, 29))
+    assert ledger.clave("42", 100, "gasto") == "supermercado"
+    assert ledger.clave("42", 101, "ingreso") == "salario"
+    assert ledger.clave("42", 102, "gasto") == ""
