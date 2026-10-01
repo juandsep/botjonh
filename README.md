@@ -97,6 +97,7 @@ see [Configuration](#configuration).
    ```
    calendario - próximos 7 días
    ultimos - últimos 5 movimientos
+   tablero - ver tus gastos en la web (enlace 1 h)
    editar - editar un movimiento: /editar 1 3usd
    anular - anular un movimiento: /anular 1
    gif - guardar GIFs de reacción
@@ -114,13 +115,13 @@ see [Configuration](#configuration).
 
    ```bash
    GCP_PROJECT_ID="$PROJECT_ID" uv run python -m assistant.admin add-owner <chat_id> <nombre>
-   for c in processed invites rate spend pending; do
+   for c in processed invites rate spend pending dash; do
      gcloud firestore fields ttls update expire_at --collection-group="$c" --enable-ttl --async
    done
    ```
 
-   The loop enables TTL cleanup of the dedup markers, invites, counters and
-   pending confirmations.
+   The loop enables TTL cleanup of the dedup markers, invites, counters,
+   pending confirmations and dashboard links.
 
 6. Register the webhook and start using the bot:
 
@@ -150,6 +151,11 @@ to the LLM.
 - `/ultimos`: the last 5 movements, numbered (1 = the most recent).
 - `/editar <n> <monto>[moneda]`: `/editar 1 3usd`, `/editar 2 2000 cop`.
 - `/anular <n>`: asks with Confirmar/Cancelar buttons, then voids it.
+- `/tablero`: a private link, valid 1 h, to a web dashboard of the month
+  (income, spend, savings rate against the 20% target, spend by category and
+  per day, last 15 movements). Served read-only by `assistant-api` at
+  `/tablero/{token}` (`?mes=YYYY-MM` for another month); `dash/{token}` holds
+  the chat_id and `expire_at`.
 - In free text the LLM does the same: "el último era 3 dólares, no 5".
 
 **Reaction GIFs.** Send a GIF with the caption `gasto` or `ingreso` (or reply

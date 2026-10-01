@@ -666,3 +666,22 @@ def test_owner_commands_refused_to_betas(st, tg, monkeypatch) -> None:
     client.post("/push", json=envelope(callback("rv:1")))
     assert sent_texts(tg) == [state.OWNER_ONLY, "No se pudo revocar."]
     revocar.assert_not_called()
+
+
+def test_tablero_link_without_llm(monkeypatch, st, llm, tg, settings) -> None:
+    monkeypatch.setattr(state, "dash_token", MagicMock(return_value="d" * 32))
+    client.post("/push", json=envelope(message("/tablero")))
+    assert sent_texts(tg) == [f"https://api.example/tablero/{'d' * 32}\nVálido 1 h."]
+    state.dash_token.assert_called_once_with("42")
+    llm.run_turn.assert_not_called()
+
+
+def test_tablero_unconfigured_and_errors(monkeypatch, st, llm, tg) -> None:
+    unset = dataclasses.replace(get_worker_settings(), api_url="")
+    monkeypatch.setattr(worker, "get_worker_settings", lambda: unset)
+    client.post("/push", json=envelope(message("/tablero")))
+    s = dataclasses.replace(unset, api_url="https://api.example")
+    monkeypatch.setattr(worker, "get_worker_settings", lambda: s)
+    monkeypatch.setattr(state, "dash_token", MagicMock(side_effect=RuntimeError()))
+    client.post("/push", json=envelope(message("/tablero")))
+    assert sent_texts(tg) == ["Tablero no configurado.", worker.FAILED_REPLY]

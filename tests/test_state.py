@@ -224,3 +224,21 @@ def test_revocar_only_betas(db) -> None:
     assert state.revocar("3") is False
     assert state.revocar("2") is True
     assert state.get_user("2") is None and state.get_user("1") is not None
+
+
+def test_dash_token(db) -> None:
+    token = state.dash_token("1")
+    assert len(token) == 32
+    doc = db.store[("dash", token)]
+    assert doc["chat_id"] == "1"
+    assert doc["expire_at"] - datetime.now(UTC) > timedelta(minutes=59)
+    assert state.chat_for_dash_token(token) == "1"
+    assert state.dash_token("1") != token  # every link is new
+
+
+def test_dash_token_expired_or_bogus(db) -> None:
+    token = state.dash_token("1")
+    db.store[("dash", token)]["expire_at"] = datetime.now(UTC)
+    assert state.chat_for_dash_token(token) is None
+    assert state.chat_for_dash_token("u" * 32) is None
+    assert state.chat_for_dash_token("../users/1") is None
