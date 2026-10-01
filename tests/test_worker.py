@@ -614,3 +614,55 @@ def test_bare_amount_asks_and_registers_the_chosen_type(
     assert sent_texts(tg)[-1] == "La confirmación expiró."
     ledger.registrar_gasto.assert_not_called()
     llm.run_turn.assert_not_called()
+
+
+def test_invitar_sends_a_deep_link_and_usuarios_revokes(st, tg, monkeypatch) -> None:
+    worker._bot_username.cache_clear()
+    tg.post(f"{TG}/getMe").mock(
+        return_value=httpx.Response(200, json={"result": {"username": "mi_bot"}})
+    )
+    crear = MagicMock(return_value="c" * 22)
+    usuarios = MagicMock(
+        return_value=[
+            ("1", {"nombre": "Yo", "rol": "owner"}),
+            ("7", {"nombre": "Ana", "rol": "beta"}),
+        ]
+    )
+    revocar = MagicMock(return_value=True)
+    for name, m in (
+        ("crear_invitacion", crear),
+        ("usuarios", usuarios),
+        ("revocar", revocar),
+    ):
+        monkeypatch.setattr(state, name, m)
+    client.post("/push", json=envelope(message("/invitar Ana")))
+    client.post("/push", json=envelope(message("/invitar")))
+    client.post("/push", json=envelope(message("/usuarios")))
+    client.post("/push", json=envelope(callback("rv:7")))
+    texts = sent_texts(tg)
+    assert texts[0].endswith("https://t.me/mi_bot?start=" + "c" * 22)
+    assert texts[1:] == [
+        worker.INVITAR_USAGE,
+        "Yo (owner)\nAna (beta)",
+        "✓ Acceso revocado.",
+    ]
+    crear.assert_called_once_with("Ana")
+    revocar.assert_called_once_with("7")
+    keyboards = [
+        json.loads(c.request.read()).get("reply_markup")
+        for c in tg.calls
+        if c.request.url.path.endswith("sendMessage")
+    ]
+    assert keyboards[2] == {
+        "inline_keyboard": [[{"text": "Revocar a Ana", "callback_data": "rv:7"}]]
+    }
+
+
+def test_owner_commands_refused_to_betas(st, tg, monkeypatch) -> None:
+    st.get_user.return_value = {**st.get_user.return_value, "rol": "beta"}
+    revocar = MagicMock()
+    monkeypatch.setattr(state, "revocar", revocar)
+    client.post("/push", json=envelope(message("/invitar Beto")))
+    client.post("/push", json=envelope(callback("rv:1")))
+    assert sent_texts(tg) == [state.OWNER_ONLY, "No se pudo revocar."]
+    revocar.assert_not_called()

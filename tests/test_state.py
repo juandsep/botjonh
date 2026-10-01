@@ -215,3 +215,12 @@ def test_gifs_dedupe_cap_and_random(db) -> None:
     assert ids["gasto"].count("f10") == 1 and ids["ingreso"] == ["i0"]
     assert state.random_gif("1", "gasto") in ids["gasto"]
     assert state.random_gif("1", "ingreso") == "i0"
+
+
+def test_revocar_only_betas(db) -> None:
+    db.store[("users", "1")] = {"nombre": "Yo", "rol": "owner"}
+    db.store[("users", "2")] = {"nombre": "Ana", "rol": "beta"}
+    assert state.revocar("1") is False
+    assert state.revocar("3") is False
+    assert state.revocar("2") is True
+    assert state.get_user("2") is None and state.get_user("1") is not None

@@ -102,12 +102,15 @@ see [Configuration](#configuration).
    gif - guardar GIFs de reacción
    conectar - conectar tu calendario (enlace iCal secreto)
    vincular - vincular tu Google Calendar (instantáneo)
+   invitar - (owner) invitar a alguien: /invitar Ana
+   usuarios - (owner) ver y revocar usuarios
    start - activar
    ```
 
 5. Add yourself as the owner (your chat id from @userinfobot), with ADC
-   pointed at the project. Owners invite beta users from the chat; a beta joins
-   with `/start <code>`:
+   pointed at the project. Only invited people can use the bot: the owner sends
+   `/invitar <nombre>` and forwards the single-use `t.me` link (valid 24 h);
+   `/usuarios` lists users with a button to revoke a beta:
 
    ```bash
    GCP_PROJECT_ID="$PROJECT_ID" uv run python -m assistant.admin add-owner <chat_id> <nombre>

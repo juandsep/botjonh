@@ -279,11 +279,31 @@ OWNER_ONLY = "Solo el owner puede hacer eso."
 def invitar_beta(ctx: ToolContext, nombre: str) -> str:
     if ctx.rol != "owner":
         return OWNER_ONLY
+    code = crear_invitacion(nombre)
+    return f"Invitación para {nombre}: /start {code} (un uso, válida 24 h)."
+
+
+def crear_invitacion(nombre: str) -> str:
+    """Single-use code, valid 24 h; also the payload of a t.me deep link."""
     code = secrets.token_urlsafe(16)
     _doc("invites", code).set(
         {"nombre": nombre, "used": False, "expire_at": _now() + INVITE_TTL}
     )
-    return f"Invitación para {nombre}: /start {code} (un uso, válida 24 h)."
+    return code
+
+
+def usuarios() -> list[tuple[str, dict]]:
+    return [(s.id, s.to_dict() or {}) for s in _db().collection("users").stream()]
+
+
+def revocar(chat_id: str) -> bool:
+    """Remove a beta from the allowlist; the owner cannot be revoked. Their
+    data stays (ledger, agenda), so a new invite restores access."""
+    ref = _doc("users", chat_id)
+    if (_data(ref.get()) or {}).get("rol") != "beta":
+        return False
+    ref.delete()
+    return True
 
 
 def listar_usuarios(ctx: ToolContext) -> str:
