@@ -109,6 +109,17 @@ def busy(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
     return mod
 
 
+@pytest.fixture(autouse=True)
+def gcal(monkeypatch: pytest.MonkeyPatch) -> types.SimpleNamespace:
+    """No linked Google Calendar unless a test sets gcal.bloques."""
+    mod = types.SimpleNamespace(
+        bloques=[], espejo_crear=MagicMock(), espejo_cancelar=MagicMock()
+    )
+    mod.ocupados = lambda chat_id, desde, hasta: mod.bloques
+    monkeypatch.setitem(sys.modules, "assistant.services.gcal", mod)
+    return mod
+
+
 def at(day: int, hour: int, minute: int = 0) -> datetime:
     month = 9 if day >= 29 else 10
     return datetime(2026, month, day, hour, minute, tzinfo=PANAMA)
@@ -391,3 +402,45 @@ def test_tasks_client_is_lazy_and_cached(monkeypatch: pytest.MonkeyPatch) -> Non
     assert agenda._tasks() is agenda._tasks()
     ctor.assert_called_once()
     agenda._tasks.cache_clear()
+
+
+# --- Google Calendar mirror ------------------------------------------------------
+
+
+def test_create_and_cancel_are_mirrored(
+    db: FakeDB, tasks: MagicMock, gcal: types.SimpleNamespace
+) -> None:
+    agenda.crear_evento(make_ctx(), "Dentista", at(30, 9), recordatorio_min=10)
+    ctx, evento_id, data = gcal.espejo_crear.call_args.args
+    assert (ctx.chat_id, evento_id, data["titulo"]) == ("42", "100", "Dentista")
+    agenda.crear_evento(make_ctx(), "Dentista", at(30, 9), recordatorio_min=10)
+    assert gcal.espejo_crear.call_count == 2  # a retry re-mirrors (409 = done)
+    agenda.cancelar_evento(make_ctx(), "100")
+    assert gcal.espejo_cancelar.call_args.args[1] == "100"
+
+
+def test_mirror_failure_never_breaks_the_turn(
+    db: FakeDB, tasks: MagicMock, gcal: types.SimpleNamespace, caplog
+) -> None:
+    gcal.espejo_crear.side_effect = RuntimeError("Dentista")
+    gcal.espejo_cancelar.side_effect = RuntimeError("Dentista")
+    assert agenda.crear_evento(make_ctx(), "Dentista", at(30, 9)).startswith("✓")
+    assert agenda.cancelar_evento(make_ctx(), "100") == "✓ evento cancelado"
+    assert "gcal_failed error=RuntimeError" in caplog.text
+    assert "Dentista" not in caplog.text
+
+
+def test_conflicts_merge_gcal_blocks(
+    db: FakeDB, tasks: MagicMock, busy: types.ModuleType, gcal: types.SimpleNamespace
+) -> None:
+    agenda.crear_evento(make_ctx(1), "Dentista", at(30, 9))
+    gcal.bloques = [(at(30, 11).astimezone(UTC), at(30, 12).astimezone(UTC), "Ocupado")]
+    assert agenda.conflictos(make_ctx(), at(30, 9), at(30, 12)) == [
+        "Dentista 09:00–10:00",
+        "Ocupado 11:00–12:00",
+    ]
+    assert agenda.libres(make_ctx(), date(2026, 9, 30)) == [
+        "08:00–09:00",
+        "10:00–11:00",
+        "12:00–20:00",
+    ]

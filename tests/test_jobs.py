@@ -22,6 +22,9 @@ def env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     state.list_chat_ids.return_value = ["42"]
     state.get_user.return_value = {"rol": "owner", "moneda": "USD"}
     state.get_preferences.return_value = {}
+    done: set[str] = set()  # cron markers
+    state.cron_done.side_effect = done.__contains__
+    state.mark_cron.side_effect = done.add
     monkeypatch.setitem(sys.modules, "assistant.services.state", state)
     telegram = MagicMock()
     monkeypatch.setattr(jobs, "Telegram", lambda token: telegram)
@@ -90,9 +93,9 @@ def test_checkin_lists_the_day(
     jobs.run_job("checkin")
     assert env.telegram.send_message.call_args.args[1] == (
         "Hoy (3):\n"
-        "−0.49 USD · café (2,000 COP)\n"
-        "−12.00 USD · uber\n"
-        "+1000.00 USD · salario\n"
+        "−0.49 USD · Café (2,000 COP)\n"
+        "−12.00 USD · Uber\n"
+        "+1000.00 USD · Salario\n"
         "Total gastos: 12.49 USD"
     )
 
@@ -111,7 +114,7 @@ def test_weekly_backs_up_and_crosses_with_income(
     jobs.run_job("weekly")
     lines = env.telegram.send_message.call_args.args[1].splitlines()
     assert lines[0].startswith("Semana ") and lines[0].endswith(": 100.00 USD")
-    assert lines[1] == "Top: restaurantes 80.00 · transporte 20.00"
+    assert lines[1] == "Top: Restaurantes 80.00 · Transporte 20.00"
     assert lines[2].startswith("Sin ingresos este mes")
     monkeypatch.setattr(ledger, "total_ingresos", lambda *a: Decimal("1000.00"))
     jobs.run_job("weekly")
@@ -168,11 +171,13 @@ def test_digest_exports_before_messages_and_survives_failure(
     env.export.side_effect = lambda s: order.append("export")
     env.telegram.send_message.side_effect = lambda *a: order.append("send")
     monkeypatch.setattr(agenda, "agenda", lambda ctx, rango: ["x"])
-    jobs.run_job("digest")
-    assert order == ["export", "send"]
     env.export.side_effect = RuntimeError("gcs down")
+    jobs.run_job("digest")  # a failed export never blocks the message
+    assert order == ["send"]
+    env.export.side_effect = lambda s: order.append("export")
     jobs.run_job("digest")
-    assert env.telegram.send_message.call_count == 2
+    assert order == ["send", "export", "send"]
+    jobs.run_job("digest")  # already exported today
     jobs.run_job("checkin")
     assert env.export.call_count == 2  # only the digest exports
 
@@ -309,3 +314,130 @@ def test_export_skipped_without_rows(
 
 def test_budgets_used_by_weekly_is_pure() -> None:
     assert budgets.mayor_exceso({}, None, Decimal(0)) is None
+
+
+def _at(monkeypatch: pytest.MonkeyPatch, *utc: int) -> None:
+    class Now(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> "Now":  # type: ignore[override]
+            return cls(*utc, tzinfo=UTC).astimezone(tz)  # type: ignore[return-value]
+
+    monkeypatch.setattr(jobs, "datetime", Now)
+
+
+@pytest.fixture
+def tick(env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    env.state.list_chat_ids.return_value = ["pa", "es"]
+    zonas = {"pa": "America/Panama", "es": "Europe/Madrid"}
+    env.state.get_user.side_effect = lambda c: {"zona_horaria": zonas[c]}
+    env.state.dash_token.return_value = "t" * 32
+    monkeypatch.setattr(agenda, "agenda", lambda ctx, rango: ["agenda"])
+    settings = dataclasses.replace(get_worker_settings(), api_url="https://api")
+    monkeypatch.setattr(jobs, "get_worker_settings", lambda: settings)
+    return env
+
+
+def _sent(env: SimpleNamespace) -> dict[str, str]:
+    return {c.args[0]: c.args[1] for c in env.telegram.send_message.call_args_list}
+
+
+def test_tick_sends_per_local_time(
+    tick: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Wed 2026-09-30 05:00 UTC: Madrid (UTC+2) 07:00 digest, Panama 00:00 nothing.
+    _at(monkeypatch, 2026, 9, 30, 5)
+    jobs.run_job("tick")
+    assert _sent(tick) == {"es": "agenda"}
+    # 20:00 UTC: Madrid 22:00 daily list with the 24 h dashboard link.
+    tick.telegram.reset_mock()
+    _at(monkeypatch, 2026, 9, 30, 20)
+    jobs.run_job("tick")
+    assert _sent(tick) == {
+        "es": "Hoy no registraste gastos.\nTablero: https://api/tablero/" + "t" * 32
+    }
+    tick.state.dash_token.assert_called_once_with("es", ttl=timedelta(hours=24))
+    # 12:00 UTC: Panama 07:00 digest; nobody at 22:00.
+    tick.telegram.reset_mock()
+    _at(monkeypatch, 2026, 9, 30, 12)
+    jobs.run_job("tick")
+    assert _sent(tick) == {"pa": "agenda"}
+
+
+def test_tick_skips_unmatched_users_without_ledger(
+    tick: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del_dia = MagicMock()
+    monkeypatch.setattr(ledger, "del_dia", del_dia)
+    _at(monkeypatch, 2026, 9, 30, 15)
+    jobs.run_job("tick")
+    tick.telegram.send_message.assert_not_called()
+    del_dia.assert_not_called()
+    tick.encolar.assert_not_called()
+
+
+def test_tick_sunday_one_combined_message(
+    tick: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        ledger, "gastos_por_categoria", lambda *a: {"otros": Decimal("5.00")}
+    )
+    # Mon 2026-10-05 03:00 UTC is Sunday 22:00 in Panama.
+    _at(monkeypatch, 2026, 10, 5, 3)
+    jobs.run_job("tick")
+    tick.telegram.send_message.assert_called_once()
+    lines = _sent(tick)["pa"].splitlines()
+    assert lines[0] == "Hoy no registraste gastos."
+    assert lines[1] == ""
+    assert lines[2].startswith("Semana ") and lines[2].endswith(": 5.00 USD")
+    assert lines[-1] == "Tablero: https://api/tablero/" + "t" * 32
+
+
+def test_tick_dashboard_line_absent(
+    tick: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _at(monkeypatch, 2026, 9, 30, 20)
+    tick.state.dash_token.side_effect = RuntimeError("firestore down")
+    jobs.run_job("tick")
+    assert _sent(tick) == {"es": "Hoy no registraste gastos."}
+    settings = dataclasses.replace(get_worker_settings(), api_url="")
+    monkeypatch.setattr(jobs, "get_worker_settings", lambda: settings)
+    tick.state.dash_token.reset_mock()
+    jobs.run_job("tick")
+    tick.state.dash_token.assert_not_called()
+    # Digest never carries the link.
+    _at(monkeypatch, 2026, 9, 30, 5)
+    jobs.run_job("tick")
+    assert _sent(tick)["es"] == "agenda"
+
+
+def test_tick_side_effects_once_a_day_from_12_utc(
+    tick: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    order: list[str] = []
+    tick.backup.side_effect = lambda s: order.append("backup")
+    tick.export.side_effect = lambda s: order.append("export")
+    tick.telegram.send_message.side_effect = lambda *a: order.append("send")
+    _at(monkeypatch, 2026, 9, 30, 11)
+    jobs.run_job("tick")
+    assert order == []
+    _at(monkeypatch, 2026, 9, 30, 12)  # Wednesday: export only, before messages
+    jobs.run_job("tick")
+    assert order == ["export", "send"]
+    _at(monkeypatch, 2026, 9, 30, 13)  # done today: not again
+    order.clear()
+    jobs.run_job("tick")
+    assert "export" not in order
+    tick.backup.side_effect = RuntimeError("gcs down")
+    _at(monkeypatch, 2026, 10, 4, 12)  # Sunday: the backup fails, messages go out
+    order.clear()
+    jobs.run_job("tick")
+    assert order == ["export", "send"]
+    tick.backup.side_effect = lambda s: order.append("backup")
+    _at(monkeypatch, 2026, 10, 4, 15)  # retried at the next tick
+    order.clear()
+    jobs.run_job("tick")
+    assert order[:1] == ["backup"] and "export" not in order
+    _at(monkeypatch, 2026, 10, 4, 16)
+    order.clear()
+    jobs.run_job("tick")
+    assert "backup" not in order

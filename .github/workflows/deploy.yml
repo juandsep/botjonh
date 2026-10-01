@@ -2,8 +2,9 @@ name: Deploy
 
 on:
   push:
+    # Releases deploy from main; a tag only marks the release (the production
+    # environment accepts main only).
     branches: [dev, main]
-    tags: ["v*"]
 
 concurrency:
   group: deploy-${{ github.ref }}
@@ -25,6 +26,8 @@ jobs:
     environment: ${{ github.ref == 'refs/heads/dev' && 'staging' || 'production' }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: Check the required variables
         env:
@@ -83,11 +86,14 @@ jobs:
             --service-account=${{ vars.GCP_WEBHOOK_SA }}
             --memory=512Mi
             --min-instances=0
+            --cpu-boost
             --max-instances=2
             --allow-unauthenticated
             --command=uvicorn,assistant.api:app,--host,0.0.0.0,--port,8080,--no-access-log
           env_vars: |
             GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
+            FIRESTORE_DATABASE=${{ env.STAGING == 'true' && 'staging' || '' }}
+            UPDATES_TOPIC=${{ env.STAGING == 'true' && 'assistant-updates-staging' || 'assistant-updates' }}
           secrets: |
             WEBHOOK_SECRET_TOKEN=assistant-webhook-secret:latest
             WEBHOOK_PATH=assistant-webhook-path:latest
@@ -102,11 +108,13 @@ jobs:
             --service-account=${{ vars.GCP_WORKER_SA }}
             --memory=512Mi
             --min-instances=0
+            --cpu-boost
             --max-instances=4
             --no-allow-unauthenticated
             --command=uvicorn,assistant.worker:app,--host,0.0.0.0,--port,8080
           env_vars: |
             GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
+            FIRESTORE_DATABASE=${{ env.STAGING == 'true' && 'staging' || '' }}
             BACKUP_BUCKET=${{ vars.BACKUP_BUCKET }}
             MLFLOW_TRACKING_URI=${{ vars.MLFLOW_TRACKING_URI }}
             WORKER_URL=${{ vars.WORKER_URL }}
@@ -116,5 +124,5 @@ jobs:
             TASKS_LOCATION=${{ vars.GCP_REGION }}
             API_URL=${{ vars.API_URL }}
           secrets: |
-            TELEGRAM_BOT_TOKEN=assistant-bot-token:latest
+            TELEGRAM_BOT_TOKEN=${{ env.STAGING == 'true' && 'assistant-bot-token-staging' || 'assistant-bot-token' }}:latest
             DEEPSEEK_API_KEY=assistant-deepseek-key:latest

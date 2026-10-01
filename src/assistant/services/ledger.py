@@ -47,7 +47,10 @@ NO_ENCONTRADO = "No encontré ese movimiento."
 
 @cache
 def _db() -> firestore.Client:
-    return firestore.Client(project=os.environ.get("GCP_PROJECT_ID") or None)
+    return firestore.Client(
+        project=os.environ.get("GCP_PROJECT_ID") or None,
+        database=os.environ.get("FIRESTORE_DATABASE") or None,  # staging has its own
+    )
 
 
 def _state() -> Any:
@@ -140,15 +143,29 @@ def _cifra(valor: Decimal) -> str:
     return f"{valor:,.0f}" if valor == valor.to_integral() else f"{valor:,.2f}"
 
 
+# Display names of the stored category keys; anything else gets a capital.
+ETIQUETAS = {
+    "supermercado": "Mercado",
+    "vivienda": "Arriendo",
+    "inversion": "Inversión",
+}
+
+
+def etiqueta(valor: str) -> str:
+    """ "supermercado" -> "Mercado", "pan" -> "Pan": for display only."""
+    return ETIQUETAS.get(valor) or valor[:1].upper() + valor[1:]
+
+
 def texto(d: dict, sep: str = " · ") -> str:
     """One movement as "−0.49 USD · café (2,000 COP)"; a reverso as its registro."""
     signo = "−" if d["tipo_mov"] == "gasto" else "+"
     texto = f"{signo}{abs(q(d['monto']))} USD"
-    etiqueta = d.get("nota") or d.get("categoria") or d.get("fuente")
-    if etiqueta:
-        texto += f"{sep}{etiqueta}"
+    label = d.get("nota") or d.get("categoria") or d.get("fuente")
+    if label:
+        texto += f"{sep}{etiqueta(label)}"
     if d.get("moneda_original", "USD") != "USD":
-        texto += f" ({_cifra(Decimal(d['monto_original']))} {d['moneda_original']})"
+        moneda = str(d["moneda_original"]).upper()
+        texto += f" ({_cifra(Decimal(d['monto_original']))} {moneda})"
     return texto
 
 
@@ -203,6 +220,18 @@ def registrar_ingreso(
     _crear(ctx.chat_id, {f"{ctx.update_id}-i0": doc})
     _state().set_last_batch(ctx.chat_id, batch)
     return texto(doc)
+
+
+def clave(chat_id: str, update_id: int, tipo_mov: str) -> str:
+    """categoria (gasto) or fuente (ingreso) registered by this update, else "".
+
+    Doc ids are deterministic, so every path (quick, LLM, buttons) reads the
+    same doc; a multi-item gasto uses its first item.
+    """
+    doc_id = f"{update_id}-0" if tipo_mov == "gasto" else f"{update_id}-i0"
+    snap = _col(chat_id).document(doc_id).get()
+    data = snap.to_dict() if snap.exists else {}
+    return str(data.get("categoria") or data.get("fuente") or "").strip().lower()
 
 
 def _reverso(ctx: ToolContext, doc_id: str, d: dict) -> dict:
@@ -359,10 +388,16 @@ def editar(
 
 def del_dia(chat_id: str, dia: date) -> list[dict]:
     """Registros of one day still in force (not reversed), oldest first."""
-    fin = (dia + timedelta(days=1)).isoformat()
+    return vigentes(chat_id, dia, dia)
+
+
+def vigentes(chat_id: str, desde: date, hasta: date) -> list[dict]:
+    """Registros in the inclusive range still in force (not reversed), oldest
+    first. A reverso keeps its registro's fecha, so both fall in the range."""
+    fin = (hasta + timedelta(days=1)).isoformat()
     consulta = (
         _col(chat_id)
-        .where(filter=FieldFilter("fecha", ">=", dia.isoformat()))
+        .where(filter=FieldFilter("fecha", ">=", desde.isoformat()))
         .where(filter=FieldFilter("fecha", "<", fin))
     )
     docs = [(s.id, s.to_dict()) for s in consulta.stream()]

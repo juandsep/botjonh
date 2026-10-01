@@ -9,6 +9,8 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: github-actions
     directory: /
@@ -19,6 +21,8 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: docker
     directory: /
@@ -29,3 +33,9 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+    cooldown:
+      default-days: 7
+    # The runtime stays on Python 3.12; only patch updates of the base image.
+    ignore:
+      - dependency-name: python
+        update-types: [version-update:semver-major, version-update:semver-minor]

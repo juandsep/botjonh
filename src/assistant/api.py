@@ -6,7 +6,8 @@ never calls the LLM. The only state it writes is the dedup marker and, for
 ``/start <code>`` from an unknown chat, the invite redemption.
 
 Also serves each chat's agenda as a private ICS feed at ``/ics/{token}.ics``
-(read-only; the token is the only secret, so it is never logged).
+(read-only; the token is the only secret, so it is never logged), and a
+month's ledger as a web dashboard at ``/tablero/{token}`` (1 h token).
 """
 
 from __future__ import annotations
@@ -14,18 +15,28 @@ from __future__ import annotations
 import hmac
 import json
 import logging
-from datetime import UTC, datetime
+import re
+from datetime import UTC, date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Request, Response
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from assistant.channels.telegram import parse_update
 from assistant.config import get_api_settings
-from assistant.services import agenda, pubsub, state
+from assistant.services import agenda, pubsub, state, tablero
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="assistant-api")
+_MES = re.compile(r"(20\d\d)-(0[1-9]|1[0-2])")
+DASH_HEADERS = {
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+    "X-Robots-Tag": "noindex",
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+}
 
 
 @app.get("/health")
@@ -46,6 +57,25 @@ def ics_feed(token: str) -> Response:
         media_type="text/calendar; charset=utf-8",
         headers={"Cache-Control": "private, max-age=300"},
     )
+
+
+@app.get("/tablero/{token}")
+def dashboard(token: str, mes: str | None = None) -> Response:
+    chat_id = state.chat_for_dash_token(token)  # checks the format first
+    if chat_id is None:
+        logger.info("tablero status=404")
+        return Response(status_code=404, headers=DASH_HEADERS)
+    if mes is None:
+        zona = (state.get_user(chat_id) or {}).get("zona_horaria") or "America/Panama"
+        dia = datetime.now(ZoneInfo(zona)).date()
+    elif match := _MES.fullmatch(mes):
+        dia = date(int(match[1]), int(match[2]), 1)
+    else:
+        logger.info("tablero status=400")
+        return Response(status_code=400, headers=DASH_HEADERS)
+    body = tablero.render(chat_id, dia)
+    logger.info("tablero status=200")
+    return HTMLResponse(body, headers=DASH_HEADERS)
 
 
 @app.post("/tg/{path}")
@@ -99,4 +129,13 @@ def _accept(update: Any, topic: str) -> Response:
         )
         state.unmark_processed(msg.update_id)
         return Response(status_code=500)
+    if msg.text and not msg.callback_query_id:
+        # Telegram runs a method returned in the webhook reply: "escribiendo…"
+        # shows at once while the worker (maybe cold) and the LLM answer.
+        typing = {
+            "method": "sendChatAction",
+            "chat_id": msg.chat_id,
+            "action": "typing",
+        }
+        return JSONResponse(typing)
     return Response(status_code=200)

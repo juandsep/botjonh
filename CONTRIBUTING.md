@@ -45,6 +45,13 @@ uv run mypy src
 uv run --with pip-audit pip-audit
 ```
 
+Pre-commit hooks guard every commit: `detect-secrets` and `gitleaks` block
+credentials, ruff's `S` rules (flake8-bandit) flag insecure code, `zizmor`
+audits the GitHub Actions workflows, `uv-lock` keeps `uv.lock` in sync with
+`pyproject.toml`, and `no-commit-to-branch` refuses direct commits to `dev` and
+`main`. The first run downloads the hook toolchains (gitleaks builds with Go),
+so it takes a few minutes once.
+
 `detect-secrets` blocks credentials from being committed. If it flags a false
 positive, add the finding to `.secrets.baseline`:
 

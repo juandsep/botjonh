@@ -13,11 +13,16 @@ Collections (Firestore native):
   no nested arrays).
 - ``ics_tokens/{token}``: chat_id of a private ICS feed; ``users.ics_token``
   points back so the link can be shown again or rotated. Never log tokens.
-- ``gifs/{chat_id}``: arrays ``gasto``/``ingreso`` of Telegram file_ids (max 20
-  each) sent as a reaction after a registration. Never log file_ids.
+- ``dash/{token}``: chat_id, ``expire_at`` (1 h) of a web dashboard link.
+  Never log tokens.
+- ``gif_catalog/{tipo}`` (gasto|ingreso): one shared, owner-curated map
+  ``{clave: [file_id, ...]}`` (max 20 each, newest last). ``clave`` is a gasto
+  categoria, an ingreso fuente or ``general`` (the fallback). A random one is
+  sent as a reaction after a registration. File ids are per bot, so staging and
+  production keep separate catalogs. Never log file_ids.
 
-Set a Firestore TTL policy on ``expire_at`` for processed, invites, rate, spend
-and pending. Doc ids contain chat_ids: never log them.
+Set a Firestore TTL policy on ``expire_at`` for processed, invites, rate, spend,
+pending and dash. Doc ids contain chat_ids: never log them.
 """
 
 from __future__ import annotations
@@ -38,6 +43,7 @@ HISTORY_TURNS = 6
 PENDING_TTL = timedelta(minutes=10)
 INVITE_TTL = timedelta(hours=24)
 PROCESSED_TTL = timedelta(days=7)
+DASH_TTL = timedelta(hours=1)
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{22}")  # secrets.token_urlsafe(16)
 GIF_MAX = 20
 _ICS_TOKEN = re.compile(r"[A-Za-z0-9_-]{32}")  # secrets.token_urlsafe(24)
@@ -45,7 +51,10 @@ _ICS_TOKEN = re.compile(r"[A-Za-z0-9_-]{32}")  # secrets.token_urlsafe(24)
 
 @cache
 def _db() -> firestore.Client:
-    return firestore.Client(project=os.environ.get("GCP_PROJECT_ID") or None)
+    return firestore.Client(
+        project=os.environ.get("GCP_PROJECT_ID") or None,
+        database=os.environ.get("FIRESTORE_DATABASE") or None,  # staging has its own
+    )
 
 
 def _doc(collection: str, doc_id: str) -> Any:
@@ -78,6 +87,18 @@ def upsert_user(
         {"nombre": nombre, "rol": rol, "moneda": moneda, "zona_horaria": zona_horaria},
         merge=True,
     )
+
+
+def cron_done(key: str) -> bool:
+    return _doc("cron", key).get().exists
+
+
+def mark_cron(key: str) -> None:
+    _doc("cron", key).set({"expire_at": _now() + timedelta(days=30)})
+
+
+def set_zona(chat_id: str, zona: str) -> None:
+    _doc("users", chat_id).set({"zona_horaria": zona}, merge=True)
 
 
 def list_chat_ids() -> list[str]:
@@ -249,23 +270,79 @@ def chat_for_ics_token(token: str) -> str | None:
     return (_data(_doc("ics_tokens", token).get()) or {}).get("chat_id")
 
 
-# --- reaction GIFs ----------------------------------------------------------------
+# --- web dashboard tokens -------------------------------------------------------
 
 
-def gifs(chat_id: str) -> dict[str, list[str]]:
-    data = _data(_doc("gifs", chat_id).get()) or {}
-    return {t: list(data.get(t, [])) for t in ("gasto", "ingreso")}
+def dash_token(chat_id: str, ttl: timedelta = DASH_TTL) -> str:
+    """A new link to the chat's dashboard (1 h default); the TTL policy deletes it."""
+    token = secrets.token_urlsafe(24)
+    _doc("dash", token).set({"chat_id": chat_id, "expire_at": _now() + ttl})
+    return token
 
 
-def add_gif(chat_id: str, tipo: str, file_id: str) -> None:
+def chat_for_dash_token(token: str) -> str | None:
+    """Owner chat of a live dashboard token. The format is checked first."""
+    if not _ICS_TOKEN.fullmatch(token):
+        return None
+    data = _data(_doc("dash", token).get())
+    if not data or data["expire_at"] <= _now():  # TTL deletion lags up to a day
+        return None
+    return str(data["chat_id"])
+
+
+# --- reaction GIF catalog -------------------------------------------------------
+
+GIF_TIPOS = ("gasto", "ingreso")
+GIF_GENERAL = "general"
+_CLAVE = re.compile(r"\w{1,24}")  # letters (ñ, accents), digits and _
+
+
+def valid_clave(clave: str) -> bool:
+    return bool(_CLAVE.fullmatch(clave)) and clave == clave.lower()
+
+
+def gif_catalog(tipo: str) -> dict[str, list[str]]:
+    data = _data(_doc("gif_catalog", tipo).get()) or {}
+    return {k: list(v) for k, v in data.items()}
+
+
+def add_gif(tipo: str, clave: str, file_id: str) -> None:
     """Newest last; a repeated file_id moves to the end; keeps the last 20."""
-    ids = [f for f in gifs(chat_id)[tipo] if f != file_id] + [file_id]
-    _doc("gifs", chat_id).set({tipo: ids[-GIF_MAX:]}, merge=True)
+    catalog = gif_catalog(tipo)
+    ids = [f for f in catalog.get(clave, []) if f != file_id] + [file_id]
+    # ponytail: read-modify-write without a transaction; one curator (the owner).
+    _doc("gif_catalog", tipo).set({**catalog, clave: ids[-GIF_MAX:]})
 
 
-def random_gif(chat_id: str, tipo: str) -> str | None:
-    ids = gifs(chat_id).get(tipo) or []
+def remove_gif(file_id: str) -> int:
+    """Drop a file_id from every tipo and clave; returns how many were removed."""
+    removed = 0
+    for tipo in GIF_TIPOS:
+        catalog = gif_catalog(tipo)
+        kept = {k: [f for f in v if f != file_id] for k, v in catalog.items()}
+        n = sum(map(len, catalog.values())) - sum(map(len, kept.values()))
+        if n:
+            _doc("gif_catalog", tipo).set({k: v for k, v in kept.items() if v})
+            removed += n
+    return removed
+
+
+def random_gif(tipo: str, clave: str) -> str | None:
+    """A GIF of the movement's clave, else of ``general``; None when both empty."""
+    catalog = gif_catalog(tipo)
+    ids = catalog.get(clave) or catalog.get(GIF_GENERAL) or []
     return secrets.choice(ids) if ids else None
+
+
+def migrate_gifs(chat_id: str) -> int:
+    """Copy a chat's old ``gifs/{chat_id}`` lists into ``general``."""
+    old = _data(_doc("gifs", chat_id).get()) or {}
+    n = 0
+    for tipo in GIF_TIPOS:
+        for file_id in old.get(tipo, []):
+            add_gif(tipo, GIF_GENERAL, file_id)
+            n += 1
+    return n
 
 
 # --- owner tools -----------------------------------------------------------------
@@ -276,11 +353,31 @@ OWNER_ONLY = "Solo el owner puede hacer eso."
 def invitar_beta(ctx: ToolContext, nombre: str) -> str:
     if ctx.rol != "owner":
         return OWNER_ONLY
+    code = crear_invitacion(nombre)
+    return f"Invitación para {nombre}: /start {code} (un uso, válida 24 h)."
+
+
+def crear_invitacion(nombre: str) -> str:
+    """Single-use code, valid 24 h; also the payload of a t.me deep link."""
     code = secrets.token_urlsafe(16)
     _doc("invites", code).set(
         {"nombre": nombre, "used": False, "expire_at": _now() + INVITE_TTL}
     )
-    return f"Invitación para {nombre}: /start {code} (un uso, válida 24 h)."
+    return code
+
+
+def usuarios() -> list[tuple[str, dict]]:
+    return [(s.id, s.to_dict() or {}) for s in _db().collection("users").stream()]
+
+
+def revocar(chat_id: str) -> bool:
+    """Remove a beta from the allowlist; the owner cannot be revoked. Their
+    data stays (ledger, agenda), so a new invite restores access."""
+    ref = _doc("users", chat_id)
+    if (_data(ref.get()) or {}).get("rol") != "beta":
+        return False
+    ref.delete()
+    return True
 
 
 def listar_usuarios(ctx: ToolContext) -> str:

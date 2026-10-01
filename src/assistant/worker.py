@@ -18,6 +18,7 @@ import json
 import logging
 import time
 from datetime import datetime
+from functools import cache
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -36,20 +37,47 @@ app = FastAPI(title="assistant-worker")
 
 ACK = 204
 LIMIT_REPLY = "Llegaste al límite por ahora. Intenta más tarde."
-WELCOME = "Hola. Escríbeme gastos, ingresos o citas y yo los registro."
+WELCOME = """Hola 👋 Llevo tus gastos, ingresos y agenda. Escríbeme normal:
+
+💸 Gastos e ingresos (todo queda en USD; otras monedas se convierten con la TRM)
+• -12 almuerzo · 25000 cop mercado · pan 2, leche 3
+• +1500 salario (el + es ingreso) · un monto solo te pregunto
+• /ultimos, /editar 1 3usd, /anular 1 para corregir
+• /tablero: tus gastos del mes en la web
+
+📅 Agenda
+• reunión con Ana mañana 3pm · recuérdame pagar la luz el viernes 9am
+• /calendario: próximos 7 días · ¿qué tengo libre el jueves?
+• /vincular tu-correo@gmail.com: copia tus eventos a Google Calendar
+• /conectar: avisa choques con tu calendario
+
+🕙 Cada día a las 22:00 te envío el resumen del día, y el domingo el de la semana.
+Tu zona horaria: /zona America/Bogota
+
+/ayuda muestra esto de nuevo."""
+ZONA_USAGE = "Uso: /zona <zona IANA>, ej. /zona America/Bogota. Ahora: {zona}."
 TEXT_ONLY = "Por ahora solo entiendo texto."
 FAILED_REPLY = "No pude hacerlo, intenta de nuevo."
 GOOGLE_HINT = "Google Calendar: Otros calendarios → + → Desde URL, y pega el enlace."
 GIF_USAGE = (
-    "Envía un GIF con el texto gasto o ingreso, o responde a uno con /gif gasto."
-    " Tienes {gasto} de gasto y {ingreso} de ingreso."
+    "Envía un GIF con el texto gasto, gasto restaurantes, ingreso o ingreso "
+    "salario (sin clave va a general), o responde a uno con /gif gasto "
+    "restaurantes. /gif borrar respondiendo a un GIF lo quita."
 )
+GIF_OWNER_ONLY = "Solo el owner cura los GIFs."
 EDIT_USAGE = "Uso: /editar <n> <monto>[moneda], ej. /editar 1 3usd"
 ANULAR_USAGE = "Uso: /anular <n>, ej. /anular 1"
 CONECTAR_HINT = (
     "Envíame el enlace iCal secreto de tu calendario. Google: Configuración → "
     "tu calendario → Integrar el calendario → Dirección secreta en formato iCal."
 )
+VINCULAR_HINT = (
+    "Comparte tu Google Calendar con "
+    "assistant-worker@jd-botjonh.iam.gserviceaccount.com (Hacer cambios en "
+    "eventos) y envía /vincular <id>. En una cuenta personal el id es tu Gmail."
+)
+OWNER_COMMANDS = ("/invitar", "/usuarios")
+INVITAR_USAGE = "Uso: /invitar <nombre>. Crea un enlace de un uso, válido 24 h."
 LEDGER_COMMANDS = ("/ultimos", "/editar", "/anular", "/gif")
 REGISTROS = {"registrar_gasto": "gasto", "registrar_ingreso": "ingreso"}
 
@@ -96,7 +124,21 @@ def _remind(chat_id: str, evento_id: str) -> None:
     logger.info("reminder_sent")
 
 
+def _warm(settings: WorkerSettings) -> None:
+    """Scheduler ping in waking hours: the push keeps this worker's instance
+    alive and the GET keeps the api's (a cold start of both costs ~10 s)."""
+    if not settings.api_url:
+        return
+    try:
+        httpx.get(f"{settings.api_url}/health", timeout=15)
+    except httpx.HTTPError:
+        logger.warning("warm_api_failed")
+
+
 def _route(payload: Any) -> int:
+    if isinstance(payload, dict) and payload.get("job") == "warm":
+        _warm(get_worker_settings())
+        return ACK
     if isinstance(payload, dict) and "job" in payload:
         from assistant.jobs import run_job
 
@@ -129,18 +171,21 @@ def handle_update(msg: InboundMessage, settings: WorkerSettings) -> int:
     channel = Telegram(settings.telegram_bot_token)
     if msg.callback_query_id:
         return _callback(ctx, msg, msg.callback_query_id, channel)
-    if msg.text.startswith("/start"):
+    if msg.text.startswith("/zona"):
+        _send(channel, msg, _zona(ctx, msg))
+        return ACK
+    if msg.text.startswith(("/start", "/ayuda", "/help")):
         _send(channel, msg, WELCOME)
         return ACK
     if msg.animation_file_id:
-        _send(channel, msg, _save_gif(msg, msg.caption, msg.animation_file_id))
+        _send(channel, msg, _gif_command(ctx, msg, msg.caption, msg.animation_file_id))
         return ACK
     if not msg.text.strip():
         _send(channel, msg, TEXT_ONLY)
         return ACK
     if _is_ical_url(msg.text):  # the link sent on its own, after /conectar
         msg = dataclasses.replace(msg, text=f"/conectar {msg.text.strip()}")
-    if msg.text.startswith(("/calendario", "/conectar")):
+    if msg.text.startswith(("/calendario", "/conectar", "/vincular")):
         reply = _command(ctx, msg, settings)
         if msg.text.startswith("/conectar ") and msg.message_id is not None:
             # The message holds the secret iCal URL: drop it from the chat.
@@ -150,6 +195,12 @@ def handle_update(msg: InboundMessage, settings: WorkerSettings) -> int:
             except httpx.HTTPError:
                 logger.warning("delete_failed update_id=%s", msg.update_id)
         _send(channel, msg, reply)
+        return ACK
+    if msg.text.startswith(OWNER_COMMANDS):
+        _send(channel, msg, *_owner_command(ctx, msg, settings))
+        return ACK
+    if msg.text.startswith("/tablero"):
+        _send(channel, msg, _tablero(ctx, msg, settings))
         return ACK
     if msg.text.startswith(LEDGER_COMMANDS):
         _send(channel, msg, *_ledger_command(ctx, msg))
@@ -211,7 +262,7 @@ def _is_ical_url(text: str) -> bool:
 
 
 def _command(ctx: ToolContext, msg: InboundMessage, settings: WorkerSettings) -> str:
-    """/calendario [enlace|nuevo] and /conectar <url>, without the LLM."""
+    """/calendario [enlace|nuevo], /conectar <url> and /vincular <id|off>."""
     cmd, _, arg = msg.text.strip().partition(" ")
     cmd, arg = cmd.split("@")[0], arg.strip()
     try:
@@ -223,6 +274,11 @@ def _command(ctx: ToolContext, msg: InboundMessage, settings: WorkerSettings) ->
             except ImportError:
                 return "Aún no disponible."
             return str(busy.conectar(ctx, arg))
+        if cmd == "/vincular":
+            if not arg:
+                return VINCULAR_HINT
+            gcal = importlib.import_module("assistant.services.gcal")
+            return str(gcal.vincular(ctx, arg))
         if arg in ("enlace", "nuevo"):
             if not settings.api_url:
                 return "Enlace no configurado."
@@ -241,6 +297,19 @@ def _quick(
 ) -> None:
     if entry.error:
         _send(channel, msg, entry.error)
+        return
+    if not entry.tipo:  # a bare amount: ask, register on the button
+        from assistant.llm import tools
+
+        try:
+            pregunta, teclado = tools.ask_tipo(ctx, entry.monto, entry.moneda)
+        except Exception as exc:
+            logger.error(
+                "quick_failed update_id=%s error=%s", msg.update_id, type(exc).__name__
+            )
+            _send(channel, msg, FAILED_REPLY)
+            return
+        _send(channel, msg, pregunta, teclado)
         return
     fecha = ctx.ahora.date()
     try:
@@ -269,11 +338,60 @@ def _quick(
         _send(channel, msg, FAILED_REPLY)
         return
     logger.info("quick_entry update_id=%s", msg.update_id)
-    registrado = str(reply).startswith(("−", "+"))
-    # A registration answers with the reaction GIF only; the text is the
-    # fallback when no GIF is stored (or on errors such as a missing rate).
-    if not (registrado and _gif(channel, msg, entry.tipo)):
-        _send(channel, msg, str(reply))
+    _registro(channel, msg, str(reply))
+
+
+def _registro(channel: Telegram, msg: InboundMessage, reply: str) -> None:
+    """A registration answers with the reaction GIF only; the text is the
+    fallback when no GIF is stored, and the answer to anything else (errors
+    such as a missing rate)."""
+    tipo = {"−": "gasto", "+": "ingreso"}.get(reply[:1])
+    if not (tipo and _gif(channel, msg, tipo)):
+        _send(channel, msg, reply)
+
+
+def _zona(ctx: ToolContext, msg: InboundMessage) -> str:
+    """/zona America/Bogota: the time zone of the agenda and the reports."""
+    zona = msg.text.strip().partition(" ")[2].strip()
+    try:
+        if not zona or "/" not in zona:
+            raise ValueError
+        ZoneInfo(zona)
+    except (ValueError, KeyError):  # ZoneInfoNotFoundError is a KeyError
+        return ZONA_USAGE.format(zona=ctx.zona_horaria)
+    state.set_zona(ctx.chat_id, zona)
+    logger.info("zona_set update_id=%s", msg.update_id)
+    return f"✓ Zona horaria: {zona}."
+
+
+@cache
+def _bot_username(bot_token: str) -> str:
+    return Telegram(bot_token).username()
+
+
+def _owner_command(
+    ctx: ToolContext, msg: InboundMessage, settings: WorkerSettings
+) -> tuple[str, list[list[tuple[str, str]]] | None]:
+    """/invitar <nombre> (t.me deep link) and /usuarios (revoke buttons)."""
+    if ctx.rol != "owner":
+        return state.OWNER_ONLY, None
+    cmd, _, nombre = msg.text.strip().partition(" ")
+    nombre = nombre.strip()
+    if cmd.split("@")[0] == "/invitar":
+        if not nombre or len(nombre) > 40:
+            return INVITAR_USAGE, None
+        code = state.crear_invitacion(nombre)
+        logger.info("invite_created update_id=%s", msg.update_id)
+        link = f"https://t.me/{_bot_username(settings.telegram_bot_token)}?start={code}"
+        return f"Invitación para {nombre} (un uso, 24 h). Reenvíale:\n{link}", None
+    filas = state.usuarios()
+    texto = "\n".join(f"{u.get('nombre', '?')} ({u.get('rol', '?')})" for _, u in filas)
+    botones = [
+        [(f"Revocar a {u.get('nombre', '?')}", f"rv:{chat_id}")]
+        for chat_id, u in filas
+        if u.get("rol") == "beta"
+    ]
+    return texto or "Sin usuarios.", botones or None
 
 
 def _ledger_command(
@@ -285,7 +403,7 @@ def _ledger_command(
     cmd, _, arg = msg.text.strip().partition(" ")
     cmd, arg = cmd.split("@")[0], arg.strip()
     if cmd == "/gif":
-        return _save_gif(msg, arg, msg.reply_animation_file_id), None
+        return _gif_command(ctx, msg, arg, msg.reply_animation_file_id), None
     n, _, rest = arg.partition(" ")
     usage = ANULAR_USAGE if cmd == "/anular" else EDIT_USAGE
     args: dict[str, Any] = {"indice": int(n)} if n.isdecimal() else {}
@@ -313,20 +431,61 @@ def _ledger_command(
     return reply, tools.buttons(token) if token else None
 
 
-def _save_gif(msg: InboundMessage, tipo: str, file_id: str | None) -> str:
-    tipo = quick.norm(tipo.strip())
-    if file_id and tipo in ("gasto", "ingreso"):
-        state.add_gif(msg.chat_id, tipo, file_id)
+def _tablero(ctx: ToolContext, msg: InboundMessage, settings: WorkerSettings) -> str:
+    """/tablero: a 1 h link to the month's dashboard on assistant-api."""
+    if not settings.api_url:
+        return "Tablero no configurado."
+    try:
+        token = state.dash_token(ctx.chat_id)
+    except Exception as exc:
+        logger.error(
+            "command_failed update_id=%s error=%s", msg.update_id, type(exc).__name__
+        )
+        return FAILED_REPLY
+    logger.info("dash_link update_id=%s", msg.update_id)
+    return f"{settings.api_url}/tablero/{token}\nVálido 1 h."
+
+
+def gif_target(text: str) -> tuple[str, str] | None:
+    """``gasto`` -> (gasto, general); ``ingreso salario`` -> (ingreso, salario)."""
+    words = text.strip().lower().split()
+    if not 1 <= len(words) <= 2 or quick.norm(words[0]) not in state.GIF_TIPOS:
+        return None
+    clave = words[1] if len(words) == 2 else state.GIF_GENERAL
+    return (quick.norm(words[0]), clave) if state.valid_clave(clave) else None
+
+
+def _gif_command(
+    ctx: ToolContext, msg: InboundMessage, arg: str, file_id: str | None
+) -> str:
+    """Owner-only curation of the shared catalog: add, borrar, list counts."""
+    if ctx.rol != "owner":
+        return GIF_OWNER_ONLY
+    if file_id and arg.strip().lower() == "borrar":
+        removed = state.remove_gif(file_id)
+        logger.info("gif_removed update_id=%s", msg.update_id)
+        return "✓ GIF borrado." if removed else "Ese GIF no está en el catálogo."
+    target = gif_target(arg)
+    if file_id and target:
+        state.add_gif(*target, file_id)
         logger.info("gif_saved update_id=%s", msg.update_id)
-        return f"✓ GIF guardado para {tipo}."
-    counts = {t: len(ids) for t, ids in state.gifs(msg.chat_id).items()}
-    return GIF_USAGE.format(**counts)
+        return f"✓ GIF guardado para {target[0]} {target[1]}."
+    lines = [GIF_USAGE]
+    for tipo in state.GIF_TIPOS:
+        counts = ", ".join(
+            f"{k} {len(v)}" for k, v in sorted(state.gif_catalog(tipo).items())
+        )
+        lines.append(f"{tipo}: {counts or 'vacío'}")
+    return "\n".join(lines)
 
 
 def _gif(channel: Telegram, msg: InboundMessage, tipo: str) -> bool:
-    """Best effort reaction GIF after a registration; False when none was sent."""
+    """Best effort reaction GIF after a registration; False when none was sent.
+    The movement's categoria/fuente picks the GIFs, else ``general``."""
     try:
-        file_id = state.random_gif(msg.chat_id, tipo)
+        ledger = importlib.import_module("assistant.services.ledger")
+        clave = ledger.clave(msg.chat_id, msg.update_id, tipo)
+        file_id = state.random_gif(tipo, clave)
         if file_id:
             channel.send_animation(msg.chat_id, file_id)
             return True
@@ -355,6 +514,20 @@ def _callback(
     except httpx.HTTPError:
         logger.warning("answer_callback_failed update_id=%s", msg.update_id)
     action, _, token = (msg.callback_data or "").partition(":")
+    if action in ("g", "i"):  # a bare amount: gasto or ingreso
+        from assistant.llm.tools import execute_tipo
+
+        try:
+            tipo = "gasto" if action == "g" else "ingreso"
+            _registro(channel, msg, execute_tipo(ctx, token, tipo))
+        except Exception as exc:
+            logger.error(
+                "pending_failed update_id=%s error=%s",
+                msg.update_id,
+                type(exc).__name__,
+            )
+            _send(channel, msg, FAILED_REPLY)
+        return ACK
     if action == "ok":
         from assistant.llm.tools import execute_pending
 
@@ -367,8 +540,12 @@ def _callback(
                 type(exc).__name__,
             )
             reply = FAILED_REPLY
-        _send(channel, msg, reply)
+        _registro(channel, msg, reply)
     elif action == "no":
         state.pop_pending(msg.chat_id, token)
         _send(channel, msg, "Cancelado.")
+    elif action == "rv":  # /usuarios revoke button
+        ok = ctx.rol == "owner" and state.revocar(token)
+        logger.info("user_revoked update_id=%s ok=%s", msg.update_id, ok)
+        _send(channel, msg, "✓ Acceso revocado." if ok else "No se pudo revocar.")
     return ACK

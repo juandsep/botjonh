@@ -1,4 +1,4 @@
-# botjonh
+# telegram-personal-assistant
 
 A single-user Telegram bot that is a finance advisor and a calendar: it logs
 expenses and income to a Firestore ledger, recommends budgets to save, keeps its
@@ -21,7 +21,7 @@ testers, on GCP for about $1–2/month (LLM tokens only).
 
 ## Architecture
 
-![botjonh on GCP](docs/architecture/architecture.png)
+![telegram-personal-assistant on GCP](docs/architecture/architecture.png)
 
 One expense message (`café 2000cop`), handled without the LLM:
 
@@ -97,26 +97,33 @@ see [Configuration](#configuration).
    ```
    calendario - próximos 7 días
    ultimos - últimos 5 movimientos
+   tablero - ver tus gastos en la web (enlace 1 h)
    editar - editar un movimiento: /editar 1 3usd
    anular - anular un movimiento: /anular 1
-   gif - guardar GIFs de reacción
+   gif - catálogo de GIFs de reacción (solo owner)
    conectar - conectar tu calendario (enlace iCal secreto)
+   vincular - vincular tu Google Calendar (instantáneo)
+   invitar - (owner) invitar a alguien: /invitar Ana
+   usuarios - (owner) ver y revocar usuarios
+   ayuda - qué puedo hacer
+   zona - tu zona horaria: /zona America/Bogota
    start - activar
    ```
 
 5. Add yourself as the owner (your chat id from @userinfobot), with ADC
-   pointed at the project. Owners invite beta users from the chat; a beta joins
-   with `/start <code>`:
+   pointed at the project. Only invited people can use the bot: the owner sends
+   `/invitar <nombre>` and forwards the single-use `t.me` link (valid 24 h);
+   `/usuarios` lists users with a button to revoke a beta:
 
    ```bash
    GCP_PROJECT_ID="$PROJECT_ID" uv run python -m assistant.admin add-owner <chat_id> <nombre>
-   for c in processed invites rate spend pending; do
+   for c in processed invites rate spend pending dash cron; do
      gcloud firestore fields ttls update expire_at --collection-group="$c" --enable-ttl --async
    done
    ```
 
-   The loop enables TTL cleanup of the dedup markers, invites, counters and
-   pending confirmations.
+   The loop enables TTL cleanup of the dedup markers, invites, counters,
+   pending confirmations and dashboard links.
 
 6. Register the webhook and start using the bot:
 
@@ -132,8 +139,10 @@ merging `dev` into `main` deploys production.
 A message with exactly one amount is registered by code, without the LLM (zero
 tokens): `gasto 2 usd cafe`, `2 usd cafe`, `cafe 2000cop gasto`, `2000 cop cafe`,
 `cafe 5`, `$3.50 uber`, `1.234,56 cop arriendo`, `1000usd ingreso`,
-`ingreso 1000 salario`. The word `ingreso` makes it income; anything else is an
-expense (`gasto` is optional). The currency is an ISO code next to the amount
+`ingreso 1000 salario`, `+500 salario`. The word `ingreso` or a leading `+`
+makes it income; `gasto`, a leading `-` or any other words make it an expense.
+A bare amount (`5`, `5 usd`) is not guessed: the bot asks with Gasto / Ingreso
+buttons and registers on the tap. The currency is an ISO code next to the amount
 (USD, COP, EUR, MXN, PEN, CLP, ARS, BRL, GBP, CAD, PAB), `$` or `€`; none means
 USD. The ledger converts to USD. `2,000`/`2.000` are thousands, `2,5` is 2.5.
 The rest of the words are the note; a few keywords pick the category (`cafe` →
@@ -144,18 +153,41 @@ to the LLM.
 - `/ultimos`: the last 5 movements, numbered (1 = the most recent).
 - `/editar <n> <monto>[moneda]`: `/editar 1 3usd`, `/editar 2 2000 cop`.
 - `/anular <n>`: asks with Confirmar/Cancelar buttons, then voids it.
+- `/tablero`: a private link, valid 1 h, to a web dashboard of the month
+  (income, spend, savings rate against the 20% target, spend by category and
+  per day, last 15 movements). Served read-only by `assistant-api` at
+  `/tablero/{token}` (`?mes=YYYY-MM` for another month); `dash/{token}` holds
+  the chat_id and `expire_at`.
 - In free text the LLM does the same: "el último era 3 dólares, no 5".
 
-**Reaction GIFs.** Send a GIF with the caption `gasto` or `ingreso` (or reply
-to a GIF with `/gif gasto`) to save it (`gifs/{chat_id}`, 20 per type). After
-each quick registration the bot answers with a random one of that type and no
-text; the text line (`−0.49 USD · café (2,000 COP)`) is only the fallback when
-no GIF is stored or sending it fails. `/gif` shows usage and counts.
+**Reaction GIFs.** One shared catalog, curated by the owner, answers every
+user: `gif_catalog/{tipo}` (`gasto`|`ingreso`) maps a clave (a gasto category
+such as `restaurantes`, an ingreso fuente such as `salario`, or `general`) to
+up to 20 Telegram file_ids. After each registration the bot answers with a
+random GIF of the movement's categoria/fuente, else of `general`, and no text;
+the text line (`−0.49 USD · café (2,000 COP)`) is only the fallback when no GIF
+fits or sending it fails. Owner only (anyone else gets a one-line refusal):
 
-**Scheduled messages** (America/Panama): 07:30 agenda of the day and
-yesterday's spend; 22:00 every movement of the day and the day's spend;
-Sunday 20:00 the week's spend, top categories and, against the month's income,
-the 20% to save and what is left per week.
+- Send a GIF with the caption `gasto`, `gasto restaurantes`, `ingreso` or
+  `ingreso salario` (no clave = `general`), or reply to a GIF with
+  `/gif gasto restaurantes`.
+- `/gif borrar` replying to a GIF removes it from every clave.
+- `/gif` alone lists the counts per tipo and clave.
+
+Telegram file_ids are per bot, so staging (its own Firestore database and bot)
+and production keep separate catalogs; curate each from its own bot. Old
+per-user libraries move with
+`uv run python -m assistant.admin migrate-gifs <owner_chat_id>` (copies
+`gifs/{owner}` into `general`).
+
+**Scheduled messages**, each in the user's own time zone (an hourly `tick` job
+in UTC picks who is due): 07:00 agenda of the day and yesterday's spend; 22:00
+every movement of the day and the day's spend; Sunday 22:00 the same list plus
+the week's spend, top categories and, against the month's income, the 20% to
+save and what is left per week, in one message. The 22:00 reports end with a
+24 h link to the dashboard. The ledger export (daily) and the backup (Sundays) run
+from 12:00 UTC: a `cron/{key}` marker records each success, and a failure is
+retried at the next hourly tick without holding back anyone's message.
 
 ## Finance ledger and reporting
 
@@ -167,7 +199,7 @@ append-only document per movement with `fecha` (ISO date), `monto` (string,
 `{update_id}-{i}`, ingreso `{update_id}-i0`, undo `{batch_id}-r{i}` (negative
 `reverso` copies; nothing is edited or deleted).
 
-Every morning the `digest` job exports the previous day's writes (America/Panama)
+Every day from 12:00 UTC the `tick` job exports the previous day's writes (America/Panama)
 to `gs://$BACKUP_BUCKET/ledger/mes=YYYY-MM/YYYY-MM-DD.csv` with the header
 `fecha,chat_id,tipo_mov,categoria,monto,moneda,nota,batch_id,tipo`. Files are
 create-only and kept forever; the weekly JSON backup lives under `backup/` with a
@@ -212,6 +244,18 @@ retry never duplicates; cancelling only flips `estado`.
   or `cuando` for a recordatorio), so Telegram pings you on the minute. Cloud
   Tasks schedules at most 30 days ahead; later reminders are enqueued by the
   morning digest once they are within 30 days. Cancelling deletes the task.
+
+### Google Calendar (instant)
+
+Share your Google Calendar with
+`assistant-worker@jd-botjonh.iam.gserviceaccount.com` (Settings → your
+calendar → Share with specific people → **Make changes to events**), then send
+`/vincular <calendar_id>` (for a personal account the primary calendar id is
+your Gmail address; `/vincular off` unlinks). From then on every create and
+cancel is mirrored there within seconds, and conflicts read that calendar
+directly (your own mirrored events never clash with themselves). Firestore
+stays the source of truth; the mirror is best effort. Requires the Calendar API
+(`calendar-json.googleapis.com`) enabled in the project.
 
 ### Subscribe from your calendar app
 

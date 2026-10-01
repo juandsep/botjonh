@@ -39,7 +39,10 @@ class FxError(Exception):
 
 @cache
 def _db() -> firestore.Client:
-    return firestore.Client(project=os.environ.get("GCP_PROJECT_ID") or None)
+    return firestore.Client(
+        project=os.environ.get("GCP_PROJECT_ID") or None,
+        database=os.environ.get("FIRESTORE_DATABASE") or None,  # staging has its own
+    )
 
 
 def _get(url: str, params: dict[str, str]) -> object:

@@ -21,7 +21,14 @@ from assistant.services.quick import NOT_POSITIVE, amount, parse
         ("mercado 2.000 cop", "gasto", "2000", "COP", "mercado", "supermercado"),
         ("1.234,56 cop arriendo", "gasto", "1234.56", "COP", "arriendo", "vivienda"),
         ("1,234.56 mxn luz", "gasto", "1234.56", "MXN", "luz", "servicios"),
-        ("1.000.000 cop", "gasto", "1000000", "COP", "", "otros"),
+        ("1.000.000 cop", "", "1000000", "COP", "", "otros"),  # bare: ask
+        ("5", "", "5", "USD", "", "otros"),
+        ("+500 salario", "ingreso", "500", "USD", "salario", ""),
+        ("+20 usd", "ingreso", "20", "USD", "", ""),
+        ("-5 cafe", "gasto", "5", "USD", "cafe", "restaurantes"),
+        ("\u22125 cafe", "gasto", "5", "USD", "cafe", "restaurantes"),
+        ("gasto 7", "gasto", "7", "USD", "", "otros"),
+        ("ingreso 900", "ingreso", "900", "USD", "", ""),
         ("$3.50 uber", "gasto", "3.50", "USD", "uber", "transporte"),
         ("5€ cine", "gasto", "5", "EUR", "cine", "entretenimiento"),
         ("usd 2 netflix", "gasto", "2", "USD", "netflix", "suscripciones"),
@@ -44,7 +51,7 @@ def test_parse_accepts(text, tipo, monto, moneda, nota, categoria) -> None:
     assert isinstance(e.monto, Decimal)
 
 
-@pytest.mark.parametrize("text", ["0 cafe", "-5 cafe", "cafe 0,00"])
+@pytest.mark.parametrize("text", ["0 cafe", "-0 cafe", "cafe 0,00"])
 def test_not_positive_is_an_error_entry(text) -> None:
     e = parse(text)
     assert e is not None and e.error == NOT_POSITIVE

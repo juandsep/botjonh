@@ -60,7 +60,10 @@ def st(monkeypatch):
     m.llm_spend_today.return_value = Decimal("0")
     m.get_history.return_value = []
     m.random_gif.return_value = None
-    m.gifs.return_value = {"gasto": ["a", "b"], "ingreso": []}
+    m.gif_catalog.side_effect = lambda tipo: (
+        {"general": ["a"], "restaurantes": ["b", "c"]} if tipo == "gasto" else {}
+    )
+    m.remove_gif.return_value = 1
     m.create_pending.return_value = "t" * 22
     for name in (
         "get_user",
@@ -72,7 +75,8 @@ def st(monkeypatch):
         "pop_pending",
         "random_gif",
         "add_gif",
-        "gifs",
+        "remove_gif",
+        "gif_catalog",
         "create_pending",
     ):
         monkeypatch.setattr(state, name, getattr(m, name))
@@ -141,6 +145,20 @@ def test_job_routed(monkeypatch) -> None:
     )
     assert client.post("/push", json=envelope({"job": "digest"})).status_code == 204
     run_job.assert_called_once_with("digest")
+
+
+def test_warm_pings_the_api_without_running_jobs(monkeypatch) -> None:
+    run_job = MagicMock()
+    monkeypatch.setitem(
+        sys.modules, "assistant.jobs", types.SimpleNamespace(run_job=run_job)
+    )
+    s = dataclasses.replace(get_worker_settings(), api_url="https://api.example")
+    monkeypatch.setattr(worker, "get_worker_settings", lambda: s)
+    get = MagicMock(side_effect=httpx.ConnectError("down"))
+    monkeypatch.setattr(worker.httpx, "get", get)
+    assert client.post("/push", json=envelope({"job": "warm"})).status_code == 204
+    get.assert_called_once_with("https://api.example/health", timeout=15)
+    run_job.assert_not_called()
 
 
 def test_turn_in_order(st, llm, tg) -> None:
@@ -307,6 +325,25 @@ def test_conectar(monkeypatch, st, llm, tg) -> None:
     llm.run_turn.assert_not_called()
 
 
+def test_vincular(monkeypatch, st, llm, tg) -> None:
+    vincular = MagicMock(return_value="✓ Google Calendar vinculado.")
+    monkeypatch.setitem(
+        sys.modules,
+        "assistant.services.gcal",
+        types.SimpleNamespace(vincular=vincular),
+    )
+    client.post("/push", json=envelope(message("/vincular")))
+    client.post("/push", json=envelope(message("/vincular yo@gmail.com")))
+    client.post("/push", json=envelope(message("/vincular off")))
+    assert sent_texts(tg) == [
+        worker.VINCULAR_HINT,
+        "✓ Google Calendar vinculado.",
+        "✓ Google Calendar vinculado.",
+    ]
+    assert [c.args[1] for c in vincular.call_args_list] == ["yo@gmail.com", "off"]
+    llm.run_turn.assert_not_called()
+
+
 def test_conectar_deletes_the_message_with_the_url(monkeypatch, st, llm, tg) -> None:
     monkeypatch.setitem(
         sys.modules,
@@ -338,6 +375,7 @@ def ledger(monkeypatch):
         ultimos_texto=MagicMock(return_value="1. cafe 2.00 USD"),
         editar=MagicMock(return_value="✓ editado"),
         anular=MagicMock(return_value="✓ anulado"),
+        clave=MagicMock(return_value=""),
     )
 
 
@@ -351,6 +389,7 @@ def animations(tg) -> list[dict]:
 
 def test_quick_gasto_skips_llm_and_sends_gif(st, llm, tg, ledger) -> None:
     st.random_gif.return_value = "gif1"
+    ledger.clave.return_value = "restaurantes"
     assert (
         client.post("/push", json=envelope(message("2000 cop cafe"))).status_code == 204
     )
@@ -364,7 +403,8 @@ def test_quick_gasto_skips_llm_and_sends_gif(st, llm, tg, ledger) -> None:
     }
     assert sent_texts(tg) == []  # the GIF is the whole answer
     assert animations(tg) == [{"chat_id": "42", "animation": "gif1"}]
-    st.random_gif.assert_called_once_with("42", "gasto")
+    ledger.clave.assert_called_once_with("42", 9, "gasto")
+    st.random_gif.assert_called_once_with("gasto", "restaurantes")
     llm.run_turn.assert_not_called()
     st.check_rate.assert_not_called()
     st.add_llm_spend.assert_not_called()
@@ -384,7 +424,7 @@ def test_quick_ingreso_without_gif_stored(st, llm, tg, ledger) -> None:
 
 
 def test_quick_errors_never_5xx(st, llm, tg, ledger, caplog) -> None:
-    client.post("/push", json=envelope(message("-5 cafe")))
+    client.post("/push", json=envelope(message("0 cafe")))
     ledger.registrar_gasto.assert_not_called()
     ledger.registrar_gasto.side_effect = RuntimeError("down")
     assert client.post("/push", json=envelope(message("cafe 5"))).status_code == 204
@@ -402,16 +442,17 @@ def test_quick_errors_never_5xx(st, llm, tg, ledger, caplog) -> None:
     llm.run_turn.assert_not_called()
 
 
-def test_llm_registration_sends_gif(st, llm, tg) -> None:
+def test_llm_registration_sends_gif(st, llm, tg, ledger) -> None:
     st.random_gif.return_value = "gif1"
+    ledger.clave.return_value = "salario"
     llm.result.keyboard = None
     llm.result.tools = ["registrar_ingreso"]
     client.post("/push", json=envelope(message("me pagaron el freelance")))
-    st.random_gif.assert_called_once_with("42", "ingreso")
+    st.random_gif.assert_called_once_with("ingreso", "salario")
     assert animations(tg) == [{"chat_id": "42", "animation": "gif1"}]
     llm.result.keyboard = [[("Sí", "ok:t")]]  # pending confirmation: no GIF yet
     llm.result.tools = ["registrar_gasto"]
-    client.post("/push", json=envelope(message("vuelo de 900")))
+    client.post("/push", json=envelope(message("vuelo de 900 ayer")))
     assert len(animations(tg)) == 1
 
 
@@ -469,29 +510,80 @@ def test_anular_asks_then_runs_on_ok(monkeypatch, st, llm, tg, ledger) -> None:
     assert sent_texts(tg)[1:] == [worker.ANULAR_USAGE, "✓ anulado"]
 
 
-def test_gif_saved_from_caption_and_reply(st, llm, tg) -> None:
-    gif = {"update_id": 11, "message": {"chat": {"id": 42}, "caption": "Gasto"}}
+def gif_update(caption: str | None = None) -> dict:
+    gif = {"update_id": 11, "message": {"chat": {"id": 42}}}
     gif["message"]["animation"] = {"file_id": "g1"}
-    client.post("/push", json=envelope(gif))
-    reply = message("/gif ingreso")
+    if caption is not None:
+        gif["message"]["caption"] = caption
+    return gif
+
+
+def test_gif_saved_from_caption_and_reply(st, llm, tg) -> None:
+    client.post("/push", json=envelope(gif_update("Gasto")))
+    client.post("/push", json=envelope(gif_update("gasto Restaurantes")))
+    reply = message("/gif ingreso salario")
     reply["message"]["reply_to_message"] = {"animation": {"file_id": "g2"}}
     client.post("/push", json=envelope(reply))
+    for bad in ("gasto comida extra", "regalo", "gasto a-b"):
+        client.post("/push", json=envelope(gif_update(bad)))
+    client.post("/push", json=envelope(gif_update()))
     client.post("/push", json=envelope(message("/gif")))
-    no_caption = {"update_id": 12, "message": {"chat": {"id": 42}}}
-    no_caption["message"]["animation"] = {"file_id": "g3"}
-    client.post("/push", json=envelope(no_caption))
     assert [c.args for c in st.add_gif.call_args_list] == [
-        ("42", "gasto", "g1"),
-        ("42", "ingreso", "g2"),
+        ("gasto", "general", "g1"),
+        ("gasto", "restaurantes", "g1"),
+        ("ingreso", "salario", "g2"),
     ]
-    usage = worker.GIF_USAGE.format(gasto=2, ingreso=0)
+    listing = f"{worker.GIF_USAGE}\ngasto: general 1, restaurantes 2\ningreso: vacío"
     assert sent_texts(tg) == [
-        "✓ GIF guardado para gasto.",
-        "✓ GIF guardado para ingreso.",
-        usage,
-        usage,
+        "✓ GIF guardado para gasto general.",
+        "✓ GIF guardado para gasto restaurantes.",
+        "✓ GIF guardado para ingreso salario.",
+        *[listing] * 5,
     ]
     llm.run_turn.assert_not_called()
+
+
+def test_gif_borrar(st, llm, tg, caplog) -> None:
+    reply = message("/gif borrar")
+    reply["message"]["reply_to_message"] = {"animation": {"file_id": "g9"}}
+    client.post("/push", json=envelope(reply))
+    st.remove_gif.return_value = 0
+    client.post("/push", json=envelope(reply))
+    st.remove_gif.assert_called_with("g9")
+    assert sent_texts(tg) == ["✓ GIF borrado.", "Ese GIF no está en el catálogo."]
+    assert "gif_removed" in caplog.text and "g9" not in caplog.text
+    st.add_gif.assert_not_called()
+
+
+def test_gif_curation_is_owner_only(st, llm, tg) -> None:
+    st.get_user.return_value = {**st.get_user.return_value, "rol": "beta"}
+    client.post("/push", json=envelope(gif_update("gasto")))
+    reply = message("/gif borrar")
+    reply["message"]["reply_to_message"] = {"animation": {"file_id": "g1"}}
+    client.post("/push", json=envelope(reply))
+    client.post("/push", json=envelope(message("/gif")))
+    assert sent_texts(tg) == [worker.GIF_OWNER_ONLY] * 3
+    st.add_gif.assert_not_called()
+    st.remove_gif.assert_not_called()
+    st.gif_catalog.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("gasto", ("gasto", "general")),
+        (" Ingreso  Salario ", ("ingreso", "salario")),
+        ("gasto inversión", ("gasto", "inversión")),
+        ("gasto año_2", ("gasto", "año_2")),
+        ("", None),
+        ("regalo", None),
+        ("gasto a-b", None),
+        ("gasto " + "x" * 25, None),
+        ("gasto comida extra", None),
+    ],
+)
+def test_gif_target(text, expected) -> None:
+    assert worker.gif_target(text) == expected
 
 
 # --- reminders from Cloud Tasks --------------------------------------------------
@@ -545,3 +637,131 @@ def test_other_links_are_not_treated_as_calendars(monkeypatch, st, llm, tg) -> N
     monkeypatch.setitem(sys.modules, "assistant.services.busy", busy)
     client.post("/push", json=envelope(message("https://example.com/x")))
     busy.conectar.assert_not_called()
+
+
+def test_bare_amount_asks_and_registers_the_chosen_type(
+    monkeypatch, st, llm, tg, ledger
+) -> None:
+    pending: dict[str, dict] = {}
+
+    def create(chat_id, action):
+        pending["tok" + str(len(pending))] = action
+        return "tok" + str(len(pending) - 1)
+
+    st.create_pending.side_effect = create
+    st.pop_pending.side_effect = lambda chat_id, t: pending.pop(t, None)
+    st.random_gif.return_value = None
+    client.post("/push", json=envelope(message("5")))
+    asked = [
+        json.loads(c.request.read())
+        for c in tg.calls
+        if c.request.url.path.endswith("sendMessage")
+    ][-1]
+    assert asked["text"] == "¿5.00 USD: gasto o ingreso?"
+    buttons = asked["reply_markup"]["inline_keyboard"][0]
+    assert [b["callback_data"] for b in buttons] == ["g:tok0", "i:tok0"]
+    ledger.registrar_ingreso.assert_not_called()
+    client.post("/push", json=envelope(callback("i:tok0")))
+    kwargs = ledger.registrar_ingreso.call_args.kwargs
+    assert (kwargs["monto"], kwargs["moneda"], kwargs["fuente"]) == (
+        Decimal("5.00"),
+        "USD",
+        "",
+    )
+    assert sent_texts(tg)[-1] == "+1000.00 USD · salario"  # no GIF: text fallback
+    client.post("/push", json=envelope(callback("g:tok0")))  # single use
+    assert sent_texts(tg)[-1] == "La confirmación expiró."
+    ledger.registrar_gasto.assert_not_called()
+    llm.run_turn.assert_not_called()
+
+
+def test_invitar_sends_a_deep_link_and_usuarios_revokes(st, tg, monkeypatch) -> None:
+    worker._bot_username.cache_clear()
+    tg.post(f"{TG}/getMe").mock(
+        return_value=httpx.Response(200, json={"result": {"username": "mi_bot"}})
+    )
+    crear = MagicMock(return_value="c" * 22)
+    usuarios = MagicMock(
+        return_value=[
+            ("1", {"nombre": "Yo", "rol": "owner"}),
+            ("7", {"nombre": "Ana", "rol": "beta"}),
+        ]
+    )
+    revocar = MagicMock(return_value=True)
+    for name, m in (
+        ("crear_invitacion", crear),
+        ("usuarios", usuarios),
+        ("revocar", revocar),
+    ):
+        monkeypatch.setattr(state, name, m)
+    client.post("/push", json=envelope(message("/invitar Ana")))
+    client.post("/push", json=envelope(message("/invitar")))
+    client.post("/push", json=envelope(message("/usuarios")))
+    client.post("/push", json=envelope(callback("rv:7")))
+    texts = sent_texts(tg)
+    assert texts[0].endswith("https://t.me/mi_bot?start=" + "c" * 22)
+    assert texts[1:] == [
+        worker.INVITAR_USAGE,
+        "Yo (owner)\nAna (beta)",
+        "✓ Acceso revocado.",
+    ]
+    crear.assert_called_once_with("Ana")
+    revocar.assert_called_once_with("7")
+    keyboards = [
+        json.loads(c.request.read()).get("reply_markup")
+        for c in tg.calls
+        if c.request.url.path.endswith("sendMessage")
+    ]
+    assert keyboards[2] == {
+        "inline_keyboard": [[{"text": "Revocar a Ana", "callback_data": "rv:7"}]]
+    }
+
+
+def test_owner_commands_refused_to_betas(st, tg, monkeypatch) -> None:
+    st.get_user.return_value = {**st.get_user.return_value, "rol": "beta"}
+    revocar = MagicMock()
+    monkeypatch.setattr(state, "revocar", revocar)
+    client.post("/push", json=envelope(message("/invitar Beto")))
+    client.post("/push", json=envelope(callback("rv:1")))
+    assert sent_texts(tg) == [state.OWNER_ONLY, "No se pudo revocar."]
+    revocar.assert_not_called()
+
+
+def test_tablero_link_without_llm(monkeypatch, st, llm, tg, settings) -> None:
+    monkeypatch.setattr(state, "dash_token", MagicMock(return_value="d" * 32))
+    client.post("/push", json=envelope(message("/tablero")))
+    assert sent_texts(tg) == [f"https://api.example/tablero/{'d' * 32}\nVálido 1 h."]
+    state.dash_token.assert_called_once_with("42")
+    llm.run_turn.assert_not_called()
+
+
+def test_tablero_unconfigured_and_errors(monkeypatch, st, llm, tg) -> None:
+    unset = dataclasses.replace(get_worker_settings(), api_url="")
+    monkeypatch.setattr(worker, "get_worker_settings", lambda: unset)
+    client.post("/push", json=envelope(message("/tablero")))
+    s = dataclasses.replace(unset, api_url="https://api.example")
+    monkeypatch.setattr(worker, "get_worker_settings", lambda: s)
+    monkeypatch.setattr(state, "dash_token", MagicMock(side_effect=RuntimeError()))
+    client.post("/push", json=envelope(message("/tablero")))
+    assert sent_texts(tg) == ["Tablero no configurado.", worker.FAILED_REPLY]
+
+
+def test_ayuda_and_zona(st, llm, tg, monkeypatch) -> None:
+    set_zona = MagicMock()
+    monkeypatch.setattr(state, "set_zona", set_zona)
+    for text in (
+        "/ayuda",
+        "/zona America/Bogota",
+        "/zona Mars/Base",
+        "/zona UTC",
+        "/zona",
+    ):
+        client.post("/push", json=envelope(message(text)))
+    usage = worker.ZONA_USAGE.format(zona="America/Panama")
+    assert sent_texts(tg) == [
+        worker.WELCOME,
+        "✓ Zona horaria: America/Bogota.",
+        *[usage] * 3,
+    ]
+    set_zona.assert_called_once_with("42", "America/Bogota")
+    llm.run_turn.assert_not_called()

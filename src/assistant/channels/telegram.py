@@ -75,6 +75,9 @@ class Telegram(Channel):
             text=text,
         )
 
+    def username(self) -> str:
+        return str(self._post("getMe")["result"]["username"])
+
     def delete_message(self, chat_id: str, message_id: int) -> None:
         self._post("deleteMessage", chat_id=chat_id, message_id=message_id)
 

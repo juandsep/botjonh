@@ -204,14 +204,73 @@ def test_ics_token_format_checked_before_lookup(monkeypatch) -> None:
         assert state.chat_for_ics_token(bad) is None
 
 
-def test_gifs_dedupe_cap_and_random(db) -> None:
-    assert state.random_gif("1", "gasto") is None
+def test_gif_catalog_dedupe_cap_and_fallback(db) -> None:
+    assert state.random_gif("gasto", "restaurantes") is None
     for i in range(25):
-        state.add_gif("1", "gasto", f"f{i}")
-    state.add_gif("1", "gasto", "f10")  # repeated: moves to the end, no copy
-    state.add_gif("1", "ingreso", "i0")
-    ids = state.gifs("1")
-    assert len(ids["gasto"]) == 20 and ids["gasto"][-1] == "f10"
-    assert ids["gasto"].count("f10") == 1 and ids["ingreso"] == ["i0"]
-    assert state.random_gif("1", "gasto") in ids["gasto"]
-    assert state.random_gif("1", "ingreso") == "i0"
+        state.add_gif("gasto", "restaurantes", f"f{i}")
+    state.add_gif("gasto", "restaurantes", "f10")  # repeated: moves to the end
+    state.add_gif("gasto", "general", "g0")
+    state.add_gif("ingreso", "general", "i0")
+    ids = state.gif_catalog("gasto")["restaurantes"]
+    assert len(ids) == 20 and ids[-1] == "f10" and ids.count("f10") == 1
+    assert state.gif_catalog("gasto")["general"] == ["g0"]
+    assert state.random_gif("gasto", "restaurantes") in ids
+    assert state.random_gif("gasto", "salud") == "g0"  # no GIFs: general
+    assert state.random_gif("gasto", "") == "g0"
+    assert state.random_gif("ingreso", "salario") == "i0"
+
+
+def test_remove_gif_everywhere(db) -> None:
+    state.add_gif("gasto", "general", "x")
+    state.add_gif("gasto", "salud", "x")
+    state.add_gif("gasto", "salud", "y")
+    state.add_gif("ingreso", "salario", "x")
+    assert state.remove_gif("x") == 3
+    assert state.gif_catalog("gasto") == {"salud": ["y"]}
+    assert state.gif_catalog("ingreso") == {}
+    assert state.remove_gif("x") == 0
+
+
+def test_migrate_gifs_into_general(db) -> None:
+    db.store[("gifs", "1")] = {"gasto": ["a", "b"], "ingreso": ["c"]}
+    state.add_gif("gasto", "general", "a")
+    assert state.migrate_gifs("1") == 3
+    assert state.gif_catalog("gasto") == {"general": ["a", "b"]}
+    assert state.gif_catalog("ingreso") == {"general": ["c"]}
+    assert state.migrate_gifs("2") == 0
+
+
+def test_valid_clave() -> None:
+    assert state.valid_clave("ñandú") and state.valid_clave("x_1")
+    assert not state.valid_clave("Comida") and not state.valid_clave("a b")
+
+
+def test_revocar_only_betas(db) -> None:
+    db.store[("users", "1")] = {"nombre": "Yo", "rol": "owner"}
+    db.store[("users", "2")] = {"nombre": "Ana", "rol": "beta"}
+    assert state.revocar("1") is False
+    assert state.revocar("3") is False
+    assert state.revocar("2") is True
+    assert state.get_user("2") is None and state.get_user("1") is not None
+
+
+def test_dash_token(db) -> None:
+    token = state.dash_token("1")
+    assert len(token) == 32
+    doc = db.store[("dash", token)]
+    assert doc["chat_id"] == "1"
+    assert doc["expire_at"] - datetime.now(UTC) > timedelta(minutes=59)
+    assert state.chat_for_dash_token(token) == "1"
+    assert state.dash_token("1") != token  # every link is new
+    long = state.dash_token("1", ttl=timedelta(hours=24))
+    assert db.store[("dash", long)]["expire_at"] - datetime.now(UTC) > timedelta(
+        hours=23
+    )
+
+
+def test_dash_token_expired_or_bogus(db) -> None:
+    token = state.dash_token("1")
+    db.store[("dash", token)]["expire_at"] = datetime.now(UTC)
+    assert state.chat_for_dash_token(token) is None
+    assert state.chat_for_dash_token("u" * 32) is None
+    assert state.chat_for_dash_token("../users/1") is None

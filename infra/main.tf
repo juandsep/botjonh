@@ -34,7 +34,7 @@ variable "firestore_location" {
 variable "github_repo" {
   description = "owner/name of the repository allowed to deploy."
   type        = string
-  default     = "juandsep/botjonh"
+  default     = "juandsep/telegram-personal-assistant"
 }
 
 variable "billing_account" {
@@ -47,7 +47,7 @@ variable "monthly_budget_usd" {
 }
 
 variable "timezone" {
-  description = "IANA timezone for the scheduler jobs (e.g. America/Panama)."
+  description = "IANA timezone for the warm scheduler job (e.g. America/Panama)."
   type        = string
   default     = "America/Panama"
 }
@@ -55,7 +55,15 @@ variable "timezone" {
 # Set after the first `assistant-worker` deploy, then apply again to create the
 # push subscription. Until then it is skipped.
 variable "worker_url" {
-  description = "URL of the deployed assistant-worker service."
+  description = "URL of the production assistant-worker service."
+  type        = string
+  default     = ""
+}
+
+# The staging worker gets its own updates topic, fed by assistant-api-staging
+# (a separate test bot), so staging never answers from the production bot.
+variable "worker_url_staging" {
+  description = "URL of the assistant-worker-staging service."
   type        = string
   default     = ""
 }
@@ -75,6 +83,7 @@ resource "google_project_service" "apis" {
     "bigquery.googleapis.com",
     "cloudbuild.googleapis.com",
     "cloudresourcemanager.googleapis.com",
+    "calendar-json.googleapis.com", # mirror into a shared Google Calendar
     "cloudkms.googleapis.com",
     "cloudscheduler.googleapis.com",
     "cloudtasks.googleapis.com",
@@ -94,6 +103,14 @@ resource "google_project_service" "apis" {
 # Firestore (native) for operational state.
 resource "google_firestore_database" "db" {
   name        = "(default)"
+  location_id = var.firestore_location
+  type        = "FIRESTORE_NATIVE"
+  depends_on  = [google_project_service.apis]
+}
+
+# The staging services and the test bot write here, never to production data.
+resource "google_firestore_database" "staging" {
+  name        = "staging"
   location_id = var.firestore_location
   type        = "FIRESTORE_NATIVE"
   depends_on  = [google_project_service.apis]
@@ -136,10 +153,11 @@ resource "google_artifact_registry_repository" "images" {
 #   printf '%s' "$VALUE" | gcloud secrets versions add NAME --data-file=-
 locals {
   secrets = [
-    "assistant-bot-token",      # Telegram bot token (@BotFather)
-    "assistant-webhook-secret", # X-Telegram-Bot-Api-Secret-Token
-    "assistant-webhook-path",   # webhook route secret (32 random chars)
-    "assistant-deepseek-key",   # DeepSeek API key
+    "assistant-bot-token",         # Telegram bot token (@BotFather)
+    "assistant-bot-token-staging", # test bot for the staging services
+    "assistant-webhook-secret",    # X-Telegram-Bot-Api-Secret-Token
+    "assistant-webhook-path",      # webhook route secret (32 random chars)
+    "assistant-deepseek-key",      # DeepSeek API key
   ]
 }
 
@@ -174,14 +192,28 @@ resource "google_pubsub_topic" "updates" {
   depends_on = [google_project_service.apis]
 }
 
+resource "google_pubsub_topic" "updates_staging" {
+  name       = "assistant-updates-staging"
+  depends_on = [google_project_service.apis]
+}
+
 resource "google_pubsub_topic" "cron" {
   name       = "assistant-cron"
   depends_on = [google_project_service.apis]
 }
 
 # The webhook service only publishes updates.
+moved {
+  from = google_pubsub_topic_iam_member.webhook_publishes_updates
+  to   = google_pubsub_topic_iam_member.webhook_publishes_updates["production"]
+}
+
 resource "google_pubsub_topic_iam_member" "webhook_publishes_updates" {
-  topic  = google_pubsub_topic.updates.name
+  for_each = {
+    production = google_pubsub_topic.updates.name
+    staging    = google_pubsub_topic.updates_staging.name
+  }
+  topic  = each.value
   role   = "roles/pubsub.publisher"
   member = google_service_account.sa["webhook"].member
 }
@@ -197,7 +229,9 @@ resource "google_project_iam_member" "worker" {
 }
 
 resource "google_secret_manager_secret_iam_member" "worker_reads_secrets" {
-  for_each  = toset(["assistant-bot-token", "assistant-deepseek-key"])
+  for_each = toset([
+    "assistant-bot-token", "assistant-bot-token-staging", "assistant-deepseek-key",
+  ])
   secret_id = google_secret_manager_secret.secret[each.value].id
   role      = "roles/secretmanager.secretAccessor"
   member    = google_service_account.sa["worker"].member
@@ -355,6 +389,26 @@ resource "google_pubsub_subscription" "updates_push" {
   }
 }
 
+resource "google_pubsub_subscription" "updates_staging_push" {
+  count = var.worker_url_staging == "" ? 0 : 1
+  name  = "assistant-updates-staging-push"
+  topic = google_pubsub_topic.updates_staging.name
+
+  ack_deadline_seconds       = 60
+  message_retention_duration = "600s"
+  retry_policy {
+    minimum_backoff = "10s"
+    maximum_backoff = "600s"
+  }
+  push_config {
+    push_endpoint = "${var.worker_url_staging}/push"
+    oidc_token {
+      service_account_email = google_service_account.sa["worker"].email
+    }
+  }
+}
+
+# Scheduled jobs run in production only.
 resource "google_pubsub_subscription" "cron_push" {
   count = var.worker_url == "" ? 0 : 1
   name  = "assistant-cron-push"
@@ -415,9 +469,12 @@ resource "google_service_account_iam_member" "worker_acts_as_itself" {
 # Cloud Scheduler publishes directly to the cron topic (no HTTP endpoints).
 locals {
   jobs = {
-    digest  = { schedule = "30 7 * * *", label = "morning digest" }
-    checkin = { schedule = "0 22 * * *", label = "list of the day's movements" }
-    weekly  = { schedule = "0 20 * * 0", label = "weekly spend vs income" }
+    # Hourly in UTC: the worker sends each user's digest (07:00), daily list
+    # (22:00) and Sunday weekly at their own local time; exports/backups at 12 UTC.
+    tick = { schedule = "0 * * * *", time_zone = "Etc/UTC", label = "per-user local-time reports" }
+    # Keeps the production instances alive (idle ones live ~15 min) so a message
+    # does not wait for two ~10 s cold starts; night stays scale-to-zero.
+    warm = { schedule = "*/10 6-23 * * *", time_zone = var.timezone, label = "keep instances warm in waking hours" }
   }
 }
 
@@ -426,7 +483,7 @@ resource "google_cloud_scheduler_job" "job" {
   name        = "assistant-${each.key}"
   description = each.value.label
   schedule    = each.value.schedule
-  time_zone   = var.timezone
+  time_zone   = each.value.time_zone
 
   pubsub_target {
     topic_name = google_pubsub_topic.cron.id
